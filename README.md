@@ -88,9 +88,9 @@ USBCLI ON | USBCLI OFF  (allow/deny JBC TX from USB console)
 
 Mapped JBC commands (backends handled via map):
 
-M_INF_PORT 0
-M_R_DEVICEIDORIGINAL
-M_R_SLEEPTEMP 0 2
+M_INF_PORT 0,
+M_R_DEVICEIDORIGINAL,
+M_R_SLEEPTEMP 0 2,
 
 
 Note: USB-originated TX is read-only by default; enable with USBCLI ON.
