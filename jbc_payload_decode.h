@@ -13,8 +13,14 @@ namespace jbc_decode {
   extern bool g_log_show_fid;
   extern int  g_log_cur_fid;
   extern bool g_log_show_syn;        // <-- moved inside the namespace
-
+  extern uint8_t g_station_ports;
+  extern bool g_show_conti_send;  // aus .ino definiert
   static inline void set_current_fid(int fid){ g_log_cur_fid = fid; }
+// Relais-Hook: im .ino definiert
+void jbc_conti_signal(bool on);
+
+// Conti-Burst (fid=250) für mehrere Familien
+static bool decode_conti_burst(Backend be, const uint8_t* d, uint8_t len);
 
 // Vorab-Deklaration: Definition kommt weiter unten im File
 static bool decode_datetime_payload(Backend be, const uint8_t* d, uint8_t len);
@@ -54,7 +60,12 @@ static inline bool is_nack_ctrl(uint8_t ctrl){
       || ctrl == FE_02::M_NACK   || ctrl == SF_02::M_NACK;
 }
 
-
+// Model-Kürzel -> Portanzahl (wie JBC Connect per Tabelle)
+static inline uint8_t ports_for_model_tag(const String& model){
+  if (model=="DM" || model=="DME" || model=="PSE" || model=="F4W") return 4;     // 4 Ports
+  if (model=="DDE"|| model=="DD"  || model=="DDR"|| model=="NA" || model=="NAE" || model=="F2") return 2; // 2 Ports
+  return 1; // sonst 1 Port
+}
 // =========================
 // KV-Helpers (einzeilig)
 // =========================
@@ -649,6 +660,7 @@ static bool decode_crossfamily_reads(Backend be, uint8_t ctrl, const uint8_t* d,
   
   return false;
 }
+
 
 
 // Connected Tool
@@ -1555,6 +1567,175 @@ static bool decode_sf_extras(Backend be, uint8_t ctrl, const uint8_t* d, uint8_t
   return false;
 }
 
+// -------- CONTI-BURST (fid=250), familienübergreifend --------
+// Erkennung:
+//   SOLD/SOLD1:  len = 1 + 10*n   (seq + n×[tip1,tip2,pwr, rsv2, flags, changes])
+//   HA:          len = 1 + 12*n   (seq + n×[air,protTC,pwr,flow,tts, status, changes])
+//                (12B passt zum HA-INF_PORT-Layout ohne Tool/Extra-Byte)
+//   Fallback HA: len = 1 + 14*n   (wenn FW 14B mit vorangestelltem 2B-Pad/Tool sendet)
+static bool decode_conti_burst(Backend be, const uint8_t* d, uint8_t len){
+  if (jbc_decode::g_log_cur_fid != 250) return false;
+  if (len < 1) return false;
+
+  const uint8_t seq = d[0];
+
+  auto print_changes_agg = [&](uint8_t agg){
+    if (!agg) return;
+    print_hdr_line(be, F("CONTIMODE_CHANGES"));
+    kv_u  (F("seq"),  seq);
+    kv_hex(F("mask"), agg, 2);
+    kv_s  (F("bits"), sold_changes_to_string(agg));
+    Serial.println();
+  };
+
+  // ---------- SOLD / SOLD1 ----------
+  if (be==BK_SOLD || be==BK_SOLD1 || be==BK_UNKNOWN){
+    if ((len >= 11) && ((uint8_t)(len-1) % 10u == 0u)){
+      const uint8_t nPorts = (uint8_t)((len - 1) / 10u);
+      uint8_t agg_changes = 0;
+      bool any_on = false;
+
+      for (uint8_t p=0; p<nPorts; ++p){
+        const uint8_t* b = &d[1 + 10u*p];
+        const uint16_t tip1    = u16le(&b[0]);
+        const uint16_t tip2    = u16le(&b[2]);
+        const uint16_t pwrPpm  = u16le(&b[4]);
+        /* b[6], b[7] reserviert/ungenutzt (bisher immer 0) */
+        const uint8_t  flags   = b[8];
+        const uint8_t  changes = b[9];
+        agg_changes |= changes;
+
+        // aktiv wenn NICHT STAND/SLEEP/HIBERNATION und Leistung ≥1 %
+        const bool not_idle   = (flags & (0x01 | 0x02 | 0x04)) == 0;
+        const bool enough_pwr = (pwrPpm >= 10);          // 10 ‰ = 1 %
+        any_on |= (not_idle && enough_pwr);
+
+        // ---- AUSGABE NUR, WENN ERWÜNSCHT ----
+        if (jbc_decode::g_show_conti_send) {
+          print_hdr_line(be, F("CONTIMODE_SENDING"));
+          kv_u  (F("seq"),  seq);
+          kv_u  (F("port"), p);
+          kv_c  (F("tip1_c"), uti_to_c(tip1), 1);
+          //kv_hex(F("tip1_uti"), tip1, 4);
+          if (tip2) {
+            kv_c  (F("tip2_c"),  uti_to_c(tip2), 1);
+            kv_hex(F("tip2_uti"), tip2, 4);
+          } else {
+            kv_s  (F("tip2_c"),  F("N/A"));
+            //kv_hex(F("tip2_uti"), tip2, 4);
+          }
+          { uint16_t cl = (pwrPpm > 1000) ? 1000 : pwrPpm;
+            kv_c(F("power_pct"), cl/10.0f, 1);
+            //kv_u(F("power_raw"), pwrPpm);
+          }
+          kv_hex(F("flags"),   flags,   2);
+          kv_s  (F("flags_bits"), sold_flags_to_string(flags));
+          kv_hex(F("changes"), changes, 2);
+          if (changes) kv_s(F("changes_bits"), sold_changes_to_string(changes));
+          Serial.println();
+        }
+      }
+      print_changes_agg(agg_changes);
+      jbc_conti_signal(any_on);
+      return true;
+    }
+  }
+
+  // ---------- HOT AIR (HA) ----------
+  if (be == BK_HA) {
+    // bevorzugt 14 B/Port (neues Layout), Fallback 12 B/Port (alt)
+    uint8_t per = 0; bool use14 = false;
+    if ((len >= 15) && ((uint8_t)(len-1) % 14u == 0u)) { per = 14; use14 = true; }
+    else if ((len >= 13) && ((uint8_t)(len-1) % 12u == 0u)) { per = 12; use14 = false; }
+    else return false;
+
+    const uint8_t nPorts = (uint8_t)((len - 1) / per);
+    uint8_t agg_changes = 0;
+    bool any_on = false;  
+    const uint8_t seq = d[0];
+
+    for (uint8_t p = 0; p < nPorts; ++p) {
+      const uint8_t* b = &d[1 + per*p];
+
+      uint16_t airUTI=0, flowSetPpm=0, powerPpm=0, extTcUTI=0, flowActPpm=0, tts_ds=0;
+      uint8_t  status=0, changes=0;
+
+      if (use14) {
+        // 14B: air, flow_set(ppm), power(ppm), ext_tc, flow_act(ppm|FFFF), tts, status, changes
+        airUTI     = u16le(&b[0]);
+        flowSetPpm = u16le(&b[2]);
+        powerPpm   = u16le(&b[4]);
+        extTcUTI   = u16le(&b[6]);
+        flowActPpm = u16le(&b[8]);
+        tts_ds     = u16le(&b[10]);
+        status     = b[12];
+        changes    = b[13];
+      } else {
+        // 12B (alt): air, power(ppm), ext_tc, tts, status, changes  — kein flow_set/flow_act
+        airUTI     = u16le(&b[0]);
+        powerPpm   = u16le(&b[2]);
+        extTcUTI   = u16le(&b[4]);
+        tts_ds     = u16le(&b[6]);
+        status     = b[8];
+        changes    = b[9];
+        flowSetPpm = 0xFFFF;  // nicht vorhanden
+        flowActPpm = 0xFFFF;  // nicht vorhanden
+      }
+
+      agg_changes |= changes;
+      any_on |= (status & 0x01) != 0;
+
+      // ---- AUSGABE NUR, WENN ERWÜNSCHT ----
+      if (jbc_decode::g_show_conti_send) {
+        print_hdr_line(be, F("CONTIMODE_SENDING"));
+        kv_u(F("seq"),  seq);
+        kv_u(F("port"), p);
+
+        kv_c(F("air_c"), uti_to_c(airUTI), 1);
+
+        if (flowSetPpm != 0xFFFF) {
+          uint16_t v = (flowSetPpm > 1000) ? 1000 : flowSetPpm;
+          kv_c(F("flow_set_pct"), v/10.0f, 1);
+          //kv_u(F("flow_set_raw"), flowSetPpm);
+        }
+
+        { uint16_t v = (powerPpm > 1000) ? 1000 : powerPpm;
+          kv_c(F("power_pct"), v/10.0f, 1);
+          //kv_u(F("power_raw"), powerPpm);
+        }
+
+        kv_c(F("ext_tc_c"), uti_to_c(extTcUTI), 1);
+
+        if (flowActPpm == 0xFFFF) {
+          kv_s(F("flow_act"), F("N/A"));
+          //kv_hex(F("flow_raw"), flowActPpm, 4);
+        } else {
+          uint16_t v = (flowActPpm > 1000) ? 1000 : flowActPpm;
+          kv_c(F("flow_act_pct"), v/10.0f, 1);
+          //kv_u(F("flow_raw"), flowActPpm);
+        }
+
+        kv_s  (F("tts"), fmt_mmss_tenths(tts_ds));
+        kv_hex(F("status"), status, 2);
+        kv_s  (F("status_bits"), ha_status_to_string(status));
+        kv_hex(F("changes"), changes, 2);
+        if (changes) kv_s(F("changes_bits"), sold_changes_to_string(changes));
+        Serial.println();
+      }
+    }
+
+    if (agg_changes) {
+      print_changes_agg(agg_changes);
+    }
+    jbc_conti_signal(any_on);
+    return true;
+  }
+
+  return false;
+}
+
+
+
 // --- Write-ACKs nur für echte Write-Controls ---
 static bool decode_write_acks(Backend be, uint8_t ctrl, const uint8_t* d, uint8_t len){
   using namespace jbc_cmd;
@@ -1861,15 +2042,25 @@ static bool decode_firmware(Backend be, uint8_t ctrl, const uint8_t* d, uint8_t 
       String verStr  = modelStr.substring(u2+1);       // z.B. "06"
       uint32_t mver  = (uint32_t)verStr.toInt();       // → 6
 
+      // >>> NEU: Portanzahl bestimmen & merken
+      g_station_ports = ports_for_model_tag(model);
+
       print_hdr_line(be, F("MODEL"));
       kv_s(F("name"), model);
       kv_s(F("type"), mtype);
       kv_u(F("ver"),  mver);
+      kv_u(F("ports"), g_station_ports);   // <<< NEU: mitloggen
       Serial.println();
     } else {
       // Fallback: nur der Mittelteil als Name
+      String model = modelStr;
+
+      // >>> NEU: auch im Fallback Ports bestimmen
+      g_station_ports = ports_for_model_tag(model);
+
       print_hdr_line(be, F("MODEL"));
-      kv_s(F("name"), modelStr);
+      kv_s(F("name"), model);
+      kv_u(F("ports"), g_station_ports);   // <<< NEU
       Serial.println();
     }
     return true;
@@ -2179,6 +2370,7 @@ static bool decode_common_u16(Backend be, uint8_t ctrl, const uint8_t* d, uint8_
 static bool decode_payload_and_print(Backend be, uint8_t ctrl, const uint8_t* d, uint8_t len){
   if (!g_log_show_syn && is_syn_ctrl(ctrl)) return true;
 
+  
   // zuerst NACK/ACK behandeln
   if (decode_nack(be, ctrl, d, len))            return true;
   if (decode_write_acks(be, ctrl, d, len))  return true;
@@ -2193,7 +2385,8 @@ static bool decode_payload_and_print(Backend be, uint8_t ctrl, const uint8_t* d,
 
   // NEU: Einmalige, familienübergreifende Read-Ausgaben (TEMPUNIT/LANGUAGE/USB/PIN/…)
   if (decode_crossfamily_reads(be, ctrl, d, len)) return true;
-
+  // >>> NEU: Conti-Burst vor allem anderen versuchen (erkennt sich am fid=250)
+  if (decode_conti_burst(be, d, len)) return true;
   // family-gated
   switch(be){
     case BK_SOLD:

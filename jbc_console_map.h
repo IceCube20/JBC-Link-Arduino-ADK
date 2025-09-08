@@ -26,6 +26,7 @@ enum ArgFmt : uint8_t {
   FMT_IPCFG,           // dhcp ip mask gw [dns] [port] → (u8 + 4+4+4+4 + u16)
 
   // -------- WRITE-Formate (CLI: port-first, Wire: values-first) --------
+  FMT_W_MASK_INDEX,    // values-first: <mask:u8> <index:u8> (z.B. SOLD_02::M_W_CONTIMODE)
   FMT_W_PORT_U8,        // CLI:  <port> <u8>           → Wire: <u8> <port>
   FMT_W_PORT_U16,       // CLI:  <port> <u16>          → Wire: <u16_lo> <u16_hi> <port>
   FMT_W_PORT_TEMP,      // CLI:  <port> <°C>           → Wire: <UTI_lo> <UTI_hi> <port>
@@ -85,7 +86,7 @@ static bool map_sold02(const String& U, ConsoleCmd& out){
   if(U.equals(F("M_R_DELAYTIME"))){            out.ctrl=SOLD_02::M_R_DELAYTIME;           out.fmt=FMT_PORT;   return true; }
   if(U.equals(F("M_R_REMOTEMODE"))){           out.ctrl=SOLD_02::M_R_REMOTEMODE;          out.fmt=FMT_NONE;   return true; }
   if(U.equals(F("M_R_CONTIMODE"))){            out.ctrl=SOLD_02::M_R_CONTIMODE;           out.fmt=FMT_NONE;   return true; }
-  if(U.equals(F("M_I_CONTIMODE"))){            out.ctrl=SOLD_02::M_I_CONTIMODE;           out.fmt=FMT_NONE;   return true; }
+  if(U.equals(F("M_I_CONTIMODE"))){            out.ctrl=SOLD_02::M_I_CONTIMODE;           out.fmt=FMT_W_MASK_INDEX;   return true; }
   if(U.equals(F("M_R_ALARMMAXTEMP"))){         out.ctrl=SOLD_02::M_R_ALARMMAXTEMP;        out.fmt=FMT_PORT;   return true; }
   if(U.equals(F("M_R_ALARMMINTEMP"))){         out.ctrl=SOLD_02::M_R_ALARMMINTEMP;        out.fmt=FMT_PORT;   return true; }
   if(U.equals(F("M_R_ALARMTEMP"))){            out.ctrl=SOLD_02::M_R_ALARMTEMP;           out.fmt=FMT_PORT;   return true; }
@@ -137,7 +138,7 @@ static bool map_sold02(const String& U, ConsoleCmd& out){
   if(U.equals(F("M_W_SELECTTEMP"))){           out.ctrl=SOLD_02::M_W_SELECTTEMP;          out.fmt=FMT_W_PORT_TEMP;            return true; }
   if(U.equals(F("M_W_SELECTTEMPVOLATILE"))){   out.ctrl=SOLD_02::M_W_SELECTTEMPVOLATILE;  out.fmt=FMT_W_PORT_TEMP;            return true; }
   if(U.equals(F("M_W_REMOTEMODE"))){           out.ctrl=SOLD_02::M_W_REMOTEMODE;          out.fmt=FMT_U8;                     return true; } // 0=OFF,1=ON
-  if(U.equals(F("M_W_CONTIMODE"))){            out.ctrl=SOLD_02::M_W_CONTIMODE;           out.fmt=FMT_U8;                     return true; } // 0=OFF,1=ON
+  if(U.equals(F("M_W_CONTIMODE"))){            out.ctrl=SOLD_02::M_W_CONTIMODE;           out.fmt=FMT_W_MASK_INDEX;                     return true; } // 0=OFF,1=ON
   if(U.equals(F("M_W_ALARMMAXTEMP"))){         out.ctrl=SOLD_02::M_W_ALARMMAXTEMP;        out.fmt=FMT_W_PORT_TEMP;                   return true; }
   if(U.equals(F("M_W_ALARMMINTEMP"))){         out.ctrl=SOLD_02::M_W_ALARMMINTEMP;        out.fmt=FMT_W_PORT_TEMP;                   return true; }
   if(U.equals(F("M_W_LOCK_PORT"))){            out.ctrl=SOLD_02::M_W_LOCK_PORT;           out.fmt=FMT_W_PORT_U8;              return true; }
@@ -233,7 +234,7 @@ static bool map_sold01(const String& U, ConsoleCmd& out){
   if(U.equals(F("M_W_AJUSTTEMP"))){            out.ctrl=SOLD_01::M_W_AJUSTTEMP;           out.fmt=FMT_W_PORT_TOOL_TEMPDELTA;  return true; } // Δ°C (signed)
   if(U.equals(F("M_W_SELECTTEMP"))){           out.ctrl=SOLD_01::M_W_SELECTTEMP;          out.fmt=FMT_W_PORT_TEMP;            return true; }
   if(U.equals(F("M_W_REMOTEMODE"))){           out.ctrl=SOLD_01::M_W_REMOTEMODE;          out.fmt=FMT_U8;                     return true; }
-  if(U.equals(F("M_W_CONTIMODE"))){            out.ctrl=SOLD_01::M_W_CONTIMODE;           out.fmt=FMT_U8;                     return true; } // 0=OFF,1=ON
+  if(U.equals(F("M_W_CONTIMODE"))){            out.ctrl=SOLD_01::M_W_CONTIMODE;           out.fmt=FMT_W_MASK_INDEX;                     return true; } // 0=OFF,1=ON
   if(U.equals(F("M_W_DEVICEID"))){             out.ctrl=SOLD_01::M_W_DEVICEID;            out.fmt=FMT_RAWHEX;                 return true; }
   if(U.equals(F("M_W_TEMPUNIT"))){             out.ctrl=SOLD_01::M_W_TEMPUNIT;            out.fmt=FMT_U8;                     return true; }
   if(U.equals(F("M_W_MAXTEMP"))){              out.ctrl=SOLD_01::M_R_MAXTEMP;             out.fmt=FMT_TEMP;                   return true; }
@@ -322,7 +323,7 @@ static bool map_ha02(const String& U, ConsoleCmd& out){
   if(U.equals(F("M_W_SELECTFLOW"))){           out.ctrl=HA_02::M_W_SELECTFLOW;          out.fmt=FMT_W_PORT_U16;             return true; } // M_W_SELECTFLOW <PORT> <FLOW> Port ist 0 Flow 100-1000 (10-100%)
   if(U.equals(F("M_W_SELECTEXTTEMP"))){        out.ctrl=HA_02::M_W_SELECTEXTTEMP;       out.fmt=FMT_W_PORT_TEMP;            return true; } // M_W_SELECTEXTTEMP <PORT> <TEMP> JTSE hat nur einen Port 0. Temp 25-450°C
   if(U.equals(F("M_W_REMOTEMODE"))){           out.ctrl=HA_02::M_W_REMOTEMODE;          out.fmt=FMT_U8;                     return true; } // M_W_REMOTEMODE <1/0> bei meiner JTSE sehe ich keine Änderung
-  if(U.equals(F("M_W_CONTIMODE"))){            out.ctrl=HA_02::M_W_CONTIMODE;           out.fmt=FMT_W_PORT_TOOL_U8;         return true; } // Gibt es bei JTSE nicht!
+  if(U.equals(F("M_W_CONTIMODE"))){            out.ctrl=HA_02::M_W_CONTIMODE;           out.fmt=FMT_W_MASK_INDEX;         return true; } // Gibt es bei JTSE nicht!
   if(U.equals(F("M_W_TEMPUNIT"))){             out.ctrl=HA_02::M_W_TEMPUNIT;            out.fmt=FMT_STRING;                 return true; } // M_W_TEMPUNIT <C/F> Celsius oder Fahrenheit
   if(U.equals(F("M_W_MAXMINTEMP"))){           out.ctrl=HA_02::M_W_MAXMINTEMP;          out.fmt=FMT_TEMP_TEMP;              return true; } // M_W_MAXMINTEMP <MAX> <MIN> 150-450°C 
   if(U.equals(F("M_W_MAXMINFLOW"))){           out.ctrl=HA_02::M_W_MAXMINFLOW;          out.fmt=FMT_U16_U16;                return true; } // M_W_MAXMINFLOW <MAX> <MIN> 100-1000 (10-100%)
@@ -393,7 +394,7 @@ static bool map_ph02(const String& U, ConsoleCmd& out){
   if(U.equals(F("M_W_SELECTPOWER"))){          out.ctrl=PH_02::M_W_SELECTPOWER;         out.fmt=FMT_W_PORT_U16;             return true; } // 0..1000
   if(U.equals(F("M_W_ACTIVEZONES"))){          out.ctrl=PH_02::M_W_ACTIVEZONES;         out.fmt=FMT_U8;                     return true; } // Bitmaske
   if(U.equals(F("M_W_REMOTEMODE"))){           out.ctrl=PH_02::M_W_REMOTEMODE;          out.fmt=FMT_U8;                     return true; }
-  if(U.equals(F("M_W_CONTIMODE"))){            out.ctrl=PH_02::M_W_CONTIMODE;           out.fmt=FMT_U8;                     return true; } // 0=OFF,1=ON
+  if(U.equals(F("M_W_CONTIMODE"))){            out.ctrl=PH_02::M_W_CONTIMODE;           out.fmt=FMT_W_MASK_INDEX;                     return true; } // 0=OFF,1=ON
   if(U.equals(F("M_W_PROFILE"))){              out.ctrl=PH_02::M_W_PROFILE;             out.fmt=FMT_U8;                     return true; }
   if(U.equals(F("M_W_SETTINGSPROFILE"))){      out.ctrl=PH_02::M_W_SETTINGSPROFILE;     out.fmt=FMT_U8;                     return true; }
   if(U.equals(F("M_W_PROFILETEACH"))){         out.ctrl=PH_02::M_W_PROFILETEACH;        out.fmt=FMT_U8;                     return true; }
@@ -759,6 +760,16 @@ bool handle(const String& line, Backend be, uint8_t /*dst_ignored*/, SendFn send
       push_u16(port);
       break;
     }
+
+    case FMT_W_MASK_INDEX: {
+      if (ntok < 3) { Serial.println(F("[CLI] Erwartet: <Maske> <Index>")); return false; }
+      uint8_t mask  = parse_u8(tok[2]);   // unterstützt auch 0x..
+      uint8_t index = parse_u8(tok[1]);
+      payload[plen++] = mask;
+      payload[plen++] = index;
+      break;
+    }
+
 
     // -------- values-first (mit Tool/Flags) --------
     case FMT_W_PORT_U8: {

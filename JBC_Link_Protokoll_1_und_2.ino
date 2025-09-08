@@ -207,6 +207,9 @@
 #endif
 // ============================================================================
 
+struct Cfg;
+
+#include <EEPROM.h>
 #include <Usb.h>
 #include <usbhub.h>
 #include "CP210x.h"
@@ -220,6 +223,8 @@ using namespace jbc_cmd;
 
 bool jbc_decode::g_log_show_fid = true;
 int  jbc_decode::g_log_cur_fid  = -1;
+bool jbc_decode::g_show_conti_send = true;   // Default, wird in setup() aus EEPROM überschrieben
+
 
 #define SERIAL_BAUD     250000
 #define KEEPALIVE_MS    500
@@ -230,6 +235,12 @@ int  jbc_decode::g_log_cur_fid  = -1;
 // FW-Retry Tuning (bis Model "DDE..." erscheint)
 #define FW_RETRY_MS_MIN     250
 #define FW_RETRY_MS_MAX    2000
+
+
+
+#define P1_PROBE_INTERVAL_MS 400  // Abstand zwischen P01-Probeversuchen
+#define P1_MAX_TRIES         5    // nach 5 Versuchen zurück zu P02/AUTO
+
 
 // ---------------- LED-Status ----------------
 #ifndef LED_BUILTIN
@@ -245,7 +256,7 @@ int  jbc_decode::g_log_cur_fid  = -1;
 
 // ---- Bridge-Info ----
 #ifndef BRIDGE_FW
-#define BRIDGE_FW    "V6.9.25beta"                 
+#define BRIDGE_FW    "V4.10.8beta"                 
 #endif
 #ifndef BRIDGE_HW
 #define BRIDGE_HW    "Arduino MEGA ADK"     
@@ -253,6 +264,96 @@ int  jbc_decode::g_log_cur_fid  = -1;
 #ifndef BRIDGE_AUTHOR
 #define BRIDGE_AUTHOR "Icecube20"          
 #endif
+// --- Relais-Konfiguration ---
+#define RELAY_PIN           7    // <— anpassen (Mega ADK: z.B. D7)
+#define RELAY_ACTIVE_HIGH   1    // 0: Modul ist aktiv-LOW, 1: aktiv-HIGH
+#define RELAY_STICKY_MS  1500    // Haltezeit gegen Flattern
+
+
+
+// ---- Konfig-Flags (EEPROM) ----
+#define CFGF_AUTO_USB_C  0x01
+#define CFGF_SHOW_CONTI  0x02   // neu: CONTIMODE-Logs anzeigen?
+#define CFGF_USBCLI_EN  0x04   // USB-CLI darf JBC senden?
+
+// ===== CLI: EINMALIGE GLOBALS & PRÄFIX =====
+
+
+static bool g_cli_from_usb         = false; // Quelle der aktuellen CLI-Zeile: true=USB, false=Serial1
+
+static inline const __FlashStringHelper* cli_src_prefix(){
+  return g_cli_from_usb ? F("[USB UART]") : F("[S1 UART]");
+}
+// ---------- Persistente Konfiguration (EEPROM) ----------
+
+
+struct Cfg {
+  uint16_t magic;   // "JC" = 0x4A43
+  uint8_t  version; // 1
+  uint8_t  flags;   // Bit0: AUTO_USB_C (1=an)
+  uint8_t  crc;     // XOR über die ersten Bytes
+};
+
+static Cfg g_cfg;
+static bool auto_usb_c = true; // Laufzeit-Flag (spiegelt EEPROM)
+static bool show_contisend = true;  // Laufzeit-Flag (wird aus EEPROM geladen)
+static bool g_usb_jbc_send_enabled = false; // USB darf JBC senden? Default: nein (read-only)
+
+static uint8_t cfg_crc(const Cfg& c){
+  const uint8_t* p = (const uint8_t*)&c;
+  uint8_t x=0; for (size_t i=0;i<sizeof(Cfg)-1;i++) x ^= p[i];
+  return x;
+}
+
+static void cfg_set_defaults(){
+  g_cfg.magic   = 0x4A43; // 'J','C'
+  g_cfg.version = 1;
+  g_cfg.flags   = CFGF_AUTO_USB_C | CFGF_SHOW_CONTI;  // beide an
+  g_cfg.crc     = cfg_crc(g_cfg);
+}
+
+static void cfg_save(){
+  g_cfg.crc = cfg_crc(g_cfg);
+  EEPROM.put(0, g_cfg);   // schreibt nur geänderte Bytes (wear-friendly)
+}
+
+static void cfg_load(){
+  EEPROM.get(0, g_cfg);
+  if (g_cfg.magic != 0x4A43 || g_cfg.version != 1 || cfg_crc(g_cfg) != g_cfg.crc){
+    cfg_set_defaults();
+    cfg_save();
+  }
+  auto_usb_c               = (g_cfg.flags & CFGF_AUTO_USB_C)  != 0;
+  show_contisend           = (g_cfg.flags & CFGF_SHOW_CONTI)  != 0;
+  g_usb_jbc_send_enabled   = (g_cfg.flags & CFGF_USBCLI_EN)   != 0;  // NEU
+}
+
+static void cfg_set_auto_usb_c(bool on){
+  if (on) g_cfg.flags |= 0x01; else g_cfg.flags &= ~0x01;
+  auto_usb_c = on;
+  cfg_save();
+}
+static void cfg_set_show_conti(bool on){
+  if (on) g_cfg.flags |=  CFGF_SHOW_CONTI;
+  else    g_cfg.flags &= ~CFGF_SHOW_CONTI;
+  show_contisend = on;
+  cfg_save();
+}
+static void cfg_set_usbcli(bool on){
+  if (on) g_cfg.flags |=  CFGF_USBCLI_EN;
+  else    g_cfg.flags &= ~CFGF_USBCLI_EN;
+  g_usb_jbc_send_enabled = on;
+  cfg_save();
+}
+
+
+static bool     s_relay   = false;
+static uint32_t s_last_on = 0;
+
+static inline void relay_write(bool on){
+  const uint8_t lvl = RELAY_ACTIVE_HIGH ? (on ? HIGH : LOW) : (on ? LOW : HIGH);
+  digitalWrite(RELAY_PIN, lvl);
+}
 
 static const __FlashStringHelper* mcu_name(){
   #if defined(__AVR_ATmega2560__)
@@ -270,6 +371,14 @@ static const __FlashStringHelper* mcu_name(){
   #endif
 }
 
+// Globale Portanzahl der Station (Default 1)
+uint8_t jbc_decode::g_station_ports = 1;
+
+
+// --- P01 Retry-Cycle ---
+static uint8_t  p1_tries = 0;
+static uint32_t t_p1_last_probe = 0;
+
 static uint32_t usb_set_due_at       = 0;   // Zeitpunkt für evtl. Write
 static bool     usb_set_done         = false; // nur einmal je Link
 static bool     usb_status_known     = false;
@@ -278,10 +387,103 @@ static bool     usb_status_read_sent = false;
 // Post-Firmware-Bootstrap nur einmal pro Link
 static bool fw_bootstrap_done = false;
 
+// Addresses / state
+static const uint8_t pcAddr = 0x1D;   // host (7-bit)
+static uint8_t stAddr = 0x00;         // learned
+bool link_up=false;
+static bool hs_seen=false;
+static uint32_t t_last_syn=0;
+static uint32_t last_hs_ts=0;
+
+
+
+// FW-Retry state
+static bool     fw_ok        = false;   // erst true, wenn Model "DDE..." erkannt
+static uint32_t t_fw_next    = 0;       // nächster Zeitpunkt für FW-Request
+static uint32_t fw_retry_gap = FW_RETRY_MS_MIN;
+
+// Einmalige UID-Anfrage (ohne Retry)
+static bool uid_requested = false;
+
+// Backend (nach *valider* FW Zeile)
+static Backend g_backend = BK_UNKNOWN;
+// Contimode Automatisch setzten
+static bool conti_auto_done = false;
+
+// Hotplug & Silence
+bool g_attached = false;
+static uint32_t t_last_rx_valid = 0;   // Zeitstempel *gültiger* Frames (BCC==0)
+
+// Einmaliges Setzen des USB-Connect-Modes pro Link (altes Flag, nicht mehr benutzt)
+static bool usb_mode_set = false;
+
+// --- Forward declarations (needed before first use) ---
+static void send_ctrl_p01(uint8_t dst, uint8_t ctrl, const uint8_t* data=nullptr, uint8_t len=0);
+static void request_fw_now();
+static void switch_to_p02_retry();
+
+static void cp_reinit_lines();
+static void drain_rx();
+static void reset_link_state();
+
+// --- Protokollerkennung ---
+enum Proto { PROTO_AUTO, PROTO_P02, PROTO_P01 };
+static Proto g_proto = PROTO_AUTO;
+static uint32_t t_proto_probe_due = 0;  // Fallback-Timer für P01
+
+// --- Hotplug & Silence helpers ---
+static void reset_link_state(){
+  stAddr = 0x00;
+  link_up = false;
+  hs_seen = false;
+  g_backend = BK_UNKNOWN;
+  t_last_syn = 0;
+  last_hs_ts = 0;
+  fw_ok = false; t_fw_next = 0; fw_retry_gap = FW_RETRY_MS_MIN;
+  uid_requested = false;
+
+  // USB-Delay-State zurücksetzen
+  usb_mode_set = false;
+  usb_set_due_at = 0;
+  usb_set_done = false;
+  usb_status_known = false;
+  usb_status_is_C = false;
+  usb_status_read_sent = false;
+  fw_bootstrap_done = false;   // Bootstrap beim neuen Link wieder erlauben
+  reset_fid_seq();
+  conti_auto_done = false;
+}
+
+// NAK-Burst-Erkenner (für P01-Handshake)
+static uint8_t  g_nak_burst = 0;
+static uint32_t g_last_nak_ts = 0;
+static inline void nak_seen(){
+  uint32_t now = millis();
+  if (now - g_last_nak_ts <= 50) g_nak_burst++;
+  else                           g_nak_burst = 1;
+  g_last_nak_ts = now;
+}
+
 enum LedMode { LED_OFF, LED_BLINK, LED_SOLID, LED_DOUBLE };
 static LedMode  g_led_mode = LED_OFF;
 static uint32_t g_led_mode_since = 0;
 static uint32_t g_led_mode_until = 0;     // 0 = unbegrenzt
+
+// Wird von decode_conti_burst() mit „sofort an/aus“ aufgerufen.
+void jbc_decode::jbc_conti_signal(bool instant_any_on){
+  const uint32_t now = millis();
+  if (instant_any_on) s_last_on = now;
+
+  // Klebezeit gegen Flattern
+  const bool target = instant_any_on || (now - s_last_on <= RELAY_STICKY_MS);
+
+  if (target != s_relay){
+    s_relay = target;
+    relay_write(s_relay);
+    // Serial.println(s_relay ? F("[RELAY] ON") : F("[RELAY] OFF"));
+  }
+}
+
 
 static inline bool dec_print_with_fid(uint8_t fid, Backend be, uint8_t ctrl, const uint8_t* d, uint8_t len){
   jbc_decode::set_current_fid(fid);
@@ -308,6 +510,52 @@ static void print_bridge_banner(){
   Serial.print(F(" build="));        Serial.print(__DATE__); Serial.print(' '); Serial.print(__TIME__);
   Serial.println();
 }
+
+static void arm_proto_auto(uint16_t delay_ms){
+  g_proto = PROTO_AUTO;
+  t_proto_probe_due = millis() + delay_ms;
+  p1_tries = 0;
+  t_p1_last_probe = 0;
+  g_nak_burst = 0;
+  g_last_nak_ts = 0;
+}
+
+
+static void p01_retry_tick(){
+  if (g_proto != PROTO_P01) return;
+  if (link_up) return;  // sobald Link in P01 steht, hier nichts mehr tun
+
+  uint32_t now = millis();
+  if ((int32_t)(now - t_p1_last_probe) >= (int32_t)P1_PROBE_INTERVAL_MS){
+    t_p1_last_probe = now;
+
+    // nächster Probe-Versuch in P01: SYN + FIRMWARE
+    send_ctrl_p01(dst_current(), BASE::M_SYN, nullptr, 0);
+    request_fw_now();  // geht via send_ctrl_by_proto -> P01
+
+    Serial.print(F("[P01] probe ")); Serial.print(p1_tries); Serial.println(F("/5"));
+
+    if (++p1_tries >= P1_MAX_TRIES){
+      switch_to_p02_retry();   // zurück in P02/AUTO und erneut auf HS warten
+      return;
+    }
+  }
+}
+
+static void switch_to_p02_retry(){
+  // sauber zurück auf P02-Handshakemodus (AUTO -> wartet 1.2 s auf HS)
+  cp_reinit_lines();
+  drain_rx();
+  reset_link_state();
+  arm_proto_auto(1200); 
+
+  Serial.print(F("[PROTO] P01 tries exceeded -> back to P02 (probe in ~"));
+  Serial.print((int32_t)(t_proto_probe_due - millis()));
+  Serial.println(F(" ms)"));
+}
+
+
+
 
 static void led_status_tick(){
   // zeitbegrenzte Modi auslaufen lassen → Zustand anhand attach/link wählen
@@ -382,14 +630,7 @@ static String g_tx_ctx_pending;       // nächste CLI-Zeile, die gesendet wird
 
 
 
-// ===== CLI: EINMALIGE GLOBALS & PRÄFIX =====
 
-static bool g_usb_jbc_send_enabled = false; // USB darf JBC senden? Default: nein (read-only)
-static bool g_cli_from_usb         = false; // Quelle der aktuellen CLI-Zeile: true=USB, false=Serial1
-
-static inline const __FlashStringHelper* cli_src_prefix(){
-  return g_cli_from_usb ? F("[USB UART]") : F("[S1 UART]");
-}
 
 static inline void print_cli_cmd_with_fid(uint8_t fid, const String& s, Backend be){
   String s_norm = s; 
@@ -414,20 +655,9 @@ static void dump_hex(const char* tag,const uint8_t* b,size_t n){
   for(size_t i=0;i<n;i++){ if(b[i]<16) Serial.print('0'); Serial.print(b[i],HEX); Serial.print(' '); }
   Serial.println();
 }
-// --- Protokollerkennung ---
-enum Proto { PROTO_AUTO, PROTO_P02, PROTO_P01 };
-static Proto g_proto = PROTO_AUTO;
-static uint32_t t_proto_probe_due = 0;  // Fallback-Timer für P01
 
-// NAK-Burst-Erkenner (für P01-Handshake)
-static uint8_t  g_nak_burst = 0;
-static uint32_t g_last_nak_ts = 0;
-static inline void nak_seen(){
-  uint32_t now = millis();
-  if (now - g_last_nak_ts <= 50) g_nak_burst++;
-  else                           g_nak_burst = 1;
-  g_last_nak_ts = now;
-}
+
+
 
 // ---- P02 framing (inner STX..ETX, XOR-BCC==0; outer DLE STX ... DLE ETX) ----
 static const uint8_t DLE=0x10, STX=0x02, ETX=0x03;
@@ -453,31 +683,11 @@ public:
 
 CP210x CP(&Usb, &cp_async);
 
-// Addresses / state
-static const uint8_t pcAddr = 0x1D;   // host (7-bit)
-static uint8_t stAddr = 0x00;         // learned
-bool link_up=false;
-static bool hs_seen=false;
-static uint32_t t_last_syn=0;
-static uint32_t last_hs_ts=0;
 
-// Backend (nach *valider* FW Zeile)
-static Backend g_backend = BK_UNKNOWN;
 
-// Hotplug & Silence
-bool g_attached = false;
-static uint32_t t_last_rx_valid = 0;   // Zeitstempel *gültiger* Frames (BCC==0)
 
-// Einmaliges Setzen des USB-Connect-Modes pro Link (altes Flag, nicht mehr benutzt)
-static bool usb_mode_set = false;
 
-// FW-Retry state
-static bool     fw_ok        = false;   // erst true, wenn Model "DDE..." erkannt
-static uint32_t t_fw_next    = 0;       // nächster Zeitpunkt für FW-Request
-static uint32_t fw_retry_gap = FW_RETRY_MS_MIN;
 
-// Einmalige UID-Anfrage (ohne Retry)
-static bool uid_requested = false;
 
 // FID-Sequenz (resetbar)
 static uint8_t g_fid_seq = 1;
@@ -552,6 +762,7 @@ static void build_p01(uint8_t src,uint8_t dst,uint8_t ctrl,
   for(uint8_t k=0;k<len;k++) inner[i++]=data[k];
   inner[i++]=0x00; inner[i++]=ETX;
   inner[i-2]=xor_bcc(inner,i);
+  in_len = i;
 }
 
 static void send_ctrl_p01(uint8_t dst,uint8_t ctrl,const uint8_t* data=nullptr,uint8_t len=0){
@@ -610,27 +821,7 @@ static void request_uid_once(){
 }
 
 
-// --- Hotplug & Silence helpers ---
-static void reset_link_state(){
-  stAddr = 0x00;
-  link_up = false;
-  hs_seen = false;
-  g_backend = BK_UNKNOWN;
-  t_last_syn = 0;
-  last_hs_ts = 0;
-  fw_ok = false; t_fw_next = 0; fw_retry_gap = FW_RETRY_MS_MIN;
-  uid_requested = false;
 
-  // USB-Delay-State zurücksetzen
-  usb_mode_set = false;
-  usb_set_due_at = 0;
-  usb_set_done = false;
-  usb_status_known = false;
-  usb_status_is_C = false;
-  usb_status_read_sent = false;
-  fw_bootstrap_done = false;   // Bootstrap beim neuen Link wieder erlauben
-  reset_fid_seq();
-}
 
 static void cp_reinit_lines(){
   CP.IFCEnable();
@@ -660,9 +851,7 @@ static void on_attach_init(){
   reset_link_state();       // passiv auf HS warten
   t_last_rx_valid = millis();
   led_set_mode(LED_BLINK);  // attached, noch kein Link
-  g_proto = PROTO_AUTO;
-  t_proto_probe_due = millis() + 1200;  // ~1.2 s auf HS warten, dann P01 probieren
-  g_nak_burst = 0; g_last_nak_ts = 0;
+  arm_proto_auto(1200);
 }
 
 static void on_detach_cleanup(){
@@ -690,7 +879,39 @@ static void fw_retry_tick(){
 // Decoder
 static void on_inner_frame(const uint8_t* f,size_t n){
   if ( (n < (g_proto == PROTO_P01 ? 7 : 8)) || xor_bcc(f, n) != 0 ) return;
-  t_last_rx_valid = millis();   // gültiges Frame gesehen
+  t_last_rx_valid = millis();
+
+  // Felder im P02-Sinne parsen (ohne Umschreiben):
+  uint8_t src_p02 = f[1] & 0x7F;
+  uint8_t fid_p02 = (n >= 8) ? f[3] : 0;
+  uint8_t ctrl_p02 = (n >= 8) ? f[4] : 0;
+
+  // <<< NEU: P02-HS universell erkennen – auch wenn g_proto==PROTO_P01
+  if (n >= 8 && fid_p02 == 253 && ctrl_p02 == BASE::M_HS) {
+    uint32_t now = millis();
+    if (now - last_hs_ts >= 300) {              // Dämpfung
+      last_hs_ts = now;
+      g_proto = PROTO_P02;                      // hochstufen auf P02
+      hs_seen = true; link_up = true;
+      if (src_p02) stAddr = src_p02;
+      Serial.print(F("[HS] from 0x")); Serial.println(src_p02, HEX);
+      send_hs_ack(dst_current());
+      led_set_mode(LED_SOLID);
+
+      // Bootstrap neu starten
+      fw_ok = false; fw_retry_gap = FW_RETRY_MS_MIN;
+      t_fw_next = millis();
+
+      // P01-Probe-Zähler sicherheitshalber zurücksetzen
+      p1_tries = 0;
+      t_p1_last_probe = 0;
+
+      // NAK-Detektor leeren
+      g_nak_burst = 0;
+      g_last_nak_ts = 0;
+    }
+    return;   // HS ist verarbeitet – restliche P01/P02-Logik überspringen
+  }
 
   uint8_t src=f[1]&0x7F, dst=f[2]&0x7F, fid=f[3], ctrl=f[4], len=f[5];
   const uint8_t* d=&f[6];
@@ -788,6 +1009,13 @@ static void on_inner_frame(const uint8_t* f,size_t n){
         usb_status_read_sent = false;
         usb_set_due_at       = millis() + USB_SET_DELAY_MS;
 
+        if (auto_usb_c) {
+          usb_set_due_at = millis() + USB_SET_DELAY_MS;
+        } else {
+          usb_set_due_at = 0;      // nichts planen
+          usb_set_done   = true;   // blockiert den One-Shot
+        }
+
         switch (g_backend) {
           case BK_HA:
             send_ctrl(dst_current(), HA_02::M_R_USB_CONNECTSTATUS);
@@ -818,7 +1046,8 @@ static void on_inner_frame(const uint8_t* f,size_t n){
             break;
         }
       }
-       fw_bootstrap_done = true;
+      auto_enable_contimode();
+      fw_bootstrap_done = true;
     }
     return;
   }
@@ -846,6 +1075,47 @@ static void on_inner_frame(const uint8_t* f,size_t n){
   if (dec_print_with_fid(fid, g_backend, ctrl, d, len)) return;
 }
 
+static void auto_enable_contimode(){
+  if (conti_auto_done || !link_up || !fw_ok) return;
+  if (g_proto == PROTO_P01) return;            // CONTI nur in P02
+
+  // Bitmaske aus Portanzahl: 1→0x01, 2→0x03, 3→0x07, 4→0x0F ...
+  uint8_t n = jbc_decode::g_station_ports;
+  if (n == 0) n = 1;
+  if (n > 8)  n = 8;
+  const uint8_t ports_mask = (uint8_t)((1u << n) - 1u);
+
+  const uint8_t speed = 6;                     // 500 ms
+  uint8_t pl[2] = { speed, ports_mask };       // <-- GENAU 2 BYTES
+
+  const uint8_t dst = dst_current();           // darf 0x00 sein
+
+  switch (g_backend){
+    case BK_HA:
+      send_ctrl(dst, HA_02::M_W_CONTIMODE,   pl, sizeof(pl));
+      break;
+    case BK_SOLD:
+      send_ctrl(dst, SOLD_02::M_W_CONTIMODE, pl, sizeof(pl));
+      break;
+    case BK_PH:
+      send_ctrl(dst, PH_02::M_W_CONTIMODE,   pl, sizeof(pl));
+      break;
+    case BK_SOLD1:
+      send_ctrl(dst, SOLD_01::M_W_CONTIMODE, pl, sizeof(pl));
+      break;
+    default:
+      return; // FE/SF kein CONTI
+  }
+
+  Serial.print(F("[AUTO] CONTIMODE dst=0x")); Serial.print(dst, HEX);
+  Serial.print(F(" ports=0x")); Serial.print(ports_mask, HEX);
+  Serial.print(F(" speed=")); Serial.println(speed);
+
+  conti_auto_done = true;
+}
+
+
+
 static void feed_rx(uint8_t b){
   enum { S_WAIT_DLE, S_WAIT_STX, S_IN, S_ESC };
   static uint8_t st=S_WAIT_DLE;
@@ -856,11 +1126,17 @@ static void feed_rx(uint8_t b){
       if(b==DLE){ st=S_WAIT_STX; break; }
       if(b==0x15){  // NAK puls -> P01-Stationsstil
         nak_seen();
-        if (g_proto==PROTO_AUTO && g_nak_burst>=4){
+        if (g_proto == PROTO_AUTO
+          && (int32_t)(millis() - t_proto_probe_due) >= 0   // HS-Fenster abgelaufen?
+          && g_nak_burst >= 4) {
           g_proto = PROTO_P01;
+          p1_tries = 0;                // reset
+          t_p1_last_probe = 0;
           Serial.println(F("[PROTO] NAK burst -> switch to P01"));
+          // erster Probe-Versuch direkt:
           send_ctrl_p01(dst_current(), BASE::M_SYN, nullptr, 0);
           request_fw_now();
+          p1_tries = 1;                // erster Versuch gezählt
         }
       }
       break;
@@ -891,6 +1167,7 @@ static void link_watchdog_tick(){
     reset_link_state();
     cp_reinit_lines();
     drain_rx();
+    arm_proto_auto(1200);
   }
 }
 
@@ -899,10 +1176,14 @@ static void proto_probe_tick(){
   if (g_proto != PROTO_AUTO)  return;
   if ((int32_t)(millis() - t_proto_probe_due) >= 0){
     g_proto = PROTO_P01;
+    p1_tries = 0;                // reset
+    t_p1_last_probe = 0;
     Serial.println(F("[PROTO] No HS -> fallback to P01"));
-    // anklopfen: SYN + FIRMWARE im P01-Format
+
+    // erster Probe-Versuch direkt:
     send_ctrl_p01(dst_current(), BASE::M_SYN, nullptr, 0);
-    request_fw_now(); // nutzt jetzt P01
+    request_fw_now();            // nutzt nun P01
+    p1_tries = 1;                // erster Versuch gezählt
   }
 }
 
@@ -922,7 +1203,9 @@ static void print_cli_help(){
   Serial.println(F("  SYN ON | SYN OFF   (M_SYN Logs an/aus)"));
   Serial.println(F("  FID ON | FID OFF   (FID in Pretty-Prints an/aus)"));
   Serial.println(F("  TXRX ON | TXRX OFF (Alias für LOG ON/OFF)"));
+  Serial.println(F("  CONTISEND ON | CONTISEND OFF   (nur [_CONTIMODE_SENDING] zeigen/verbergen)"));
   Serial.println(F("  USBCLI ON | USBCLI OFF  (JBC-Senden über USB erlauben/verbieten)"));
+  Serial.println(F("  USBAUTO ON | USBAUTO OFF   (automatisches Setzen von USB_CONNECTSTATUS=':C')"));
   Serial.println(F("  Prefixe in Ausgaben: [USB] / [S1]"));
   Serial.println(F("JBC Kommandos:"));
   Serial.println(F("  z.B.  M_INF_PORT 0"));
@@ -983,8 +1266,49 @@ static void cli_process(const String &line_in){
   if (up == "FID ON")  { jbc_decode::g_log_show_fid = true;  Serial.print(cli_src_prefix()); Serial.println(F(" [DBG] FID=ON"));  return; }
   if (up == "FID OFF") { jbc_decode::g_log_show_fid = false; Serial.print(cli_src_prefix()); Serial.println(F(" [DBG] FID=OFF")); return; }
 
-  if (up == "USBCLI ON")  { g_usb_jbc_send_enabled = true;  Serial.print(cli_src_prefix()); Serial.println(F(" [CLI] USB JBC-Senden: ON"));  return; }
-  if (up == "USBCLI OFF") { g_usb_jbc_send_enabled = false; Serial.print(cli_src_prefix()); Serial.println(F(" [CLI] USB JBC-Senden: OFF")); return; }
+  if (up == "USBCLI ON") {
+    cfg_set_usbcli(true);
+    Serial.print(cli_src_prefix()); Serial.println(F(" [CLI] USB JBC-Senden: ON (persistiert)"));
+    return;
+  }
+  if (up == "USBCLI OFF") {
+    cfg_set_usbcli(false);
+    Serial.print(cli_src_prefix()); Serial.println(F(" [CLI] USB JBC-Senden: OFF (persistiert)"));
+    return;
+  }
+
+
+  if (up == "USBAUTO OFF") {
+    cfg_set_auto_usb_c(false);
+    // Noch anstehende Auto-Write-Aktion sauber abbrechen:
+    usb_set_due_at = 0;
+    usb_set_done   = true;
+    Serial.print(cli_src_prefix()); Serial.println(F(" [CFG] USBAUTO=OFF (':C' wird NICHT automatisch gesetzt)"));
+    return;
+  }
+  if (up == "USBAUTO ON") {
+    cfg_set_auto_usb_c(true);
+    // Falls bereits Link+FW ok: neuen One-Shot planen
+    if (link_up && fw_ok) {
+      usb_set_done   = false;
+      usb_set_due_at = millis() + USB_SET_DELAY_MS;
+    }
+    Serial.print(cli_src_prefix()); Serial.println(F(" [CFG] USBAUTO=ON (':C' wird automatisch gesetzt)"));
+    return;
+  }
+  if (up == "CONTISEND OFF") {
+    cfg_set_show_conti(false);
+    jbc_decode::g_show_conti_send = false;   // Laufzeit-Flag sofort übernehmen
+    Serial.print(cli_src_prefix()); Serial.println(F(" [CFG] CONTISEND=OFF (Contimode-Zeilen stumm)"));
+    return;
+  }
+  if (up == "CONTISEND ON") {
+    cfg_set_show_conti(true);
+    jbc_decode::g_show_conti_send = true;
+    Serial.print(cli_src_prefix()); Serial.println(F(" [CFG] CONTISEND=ON"));
+    return;
+  }
+
 
   // JBC-Kommandos
   if (up.startsWith("M_")){
@@ -1070,12 +1394,19 @@ static void cli_tick_dual()
 void setup(){
 
 
-
+  pinMode(19, INPUT_PULLUP);   // RX1 (AUX) hochziehen
   Serial.begin(SERIAL_BAUD);
   while(!Serial){}  // blockiert dank DualSerial nicht
 
   pinMode(LED_BUILTIN, OUTPUT);
   led_set_mode(LED_OFF);
+  pinMode(RELAY_PIN, OUTPUT);
+  relay_write(false);   // sicher AUS
+  cfg_load();
+  Serial.print(F("[CFG] USB ':C' auto=")); Serial.println(auto_usb_c ? F("ON") : F("OFF"));
+  Serial.print(F("[CFG] CONTIMODE logs=")); Serial.println(show_contisend ? F("ON") : F("OFF"));  // NEU
+  Serial.print(F("[CFG] USBCLI=")); Serial.println(g_usb_jbc_send_enabled ? F("ON") : F("OFF"));
+  jbc_decode::g_show_conti_send = show_contisend;  // NEU: Flag an Decoder durchreichen
 
 
 
@@ -1112,7 +1443,7 @@ void loop(){
 
 
   // USB ':C' delayed one-shot nach 5 s
-  if (link_up && fw_ok && !usb_set_done && usb_set_due_at &&
+  if (auto_usb_c && link_up && fw_ok && !usb_set_done && usb_set_due_at &&
       (int32_t)(millis() - usb_set_due_at) >= 0)
   {
     if (!usb_status_known || !usb_status_is_C){
@@ -1156,10 +1487,11 @@ void loop(){
 
   // Silence/Hotplug Watchdog
   link_watchdog_tick();
-    
+  // P01 Retry-Cycle
+  p01_retry_tick();
+
   proto_probe_tick();
 
   // FW-Retry (bis DDE kommt)
   fw_retry_tick();
-
 }
