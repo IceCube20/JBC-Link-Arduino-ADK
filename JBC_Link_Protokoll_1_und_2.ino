@@ -213,6 +213,8 @@ struct Cfg;
 #include <Usb.h>
 #include <usbhub.h>
 #include "CP210x.h"
+#include <Adafruit_NeoPixel.h>
+
 
 #include "jbc_commands_full.h"   // nur Enums / IDs
 #include "jbc_cmd_names.h"       // Namen + Backend-/Print-Mapper (JBC_PRINT_*)
@@ -251,12 +253,18 @@ bool jbc_decode::g_show_conti_send = true;   // Default, wird in setup() aus EEP
 #define LED_DOUBLE_PULSE    120   // Länge eines Blink-Impulses (ms)
 #define LED_DOUBLE_GAP      120   // Abstand zwischen den zwei Impulsen (ms)
 
+#define LED_PIN    6
+#define NUM_LEDS   2
+Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRBW + NEO_KHZ800);
+
+
+
 // --- USB-Status verzögert setzen ---
 #define USB_SET_DELAY_MS 5000   // 5 s nach FW
 
 // ---- Bridge-Info ----
 #ifndef BRIDGE_FW
-#define BRIDGE_FW    "V4.10.8beta"                 
+#define BRIDGE_FW    "V4.10.9beta"                 
 #endif
 #ifndef BRIDGE_HW
 #define BRIDGE_HW    "Arduino MEGA ADK"     
@@ -267,7 +275,7 @@ bool jbc_decode::g_show_conti_send = true;   // Default, wird in setup() aus EEP
 // --- Relais-Konfiguration ---
 #define RELAY_PIN           7    // <— anpassen (Mega ADK: z.B. D7)
 #define RELAY_ACTIVE_HIGH   1    // 0: Modul ist aktiv-LOW, 1: aktiv-HIGH
-#define RELAY_STICKY_MS  1500    // Haltezeit gegen Flattern
+#define RELAY_STICKY_MS  1000    // Ausschaltverzögerung
 
 
 
@@ -396,7 +404,13 @@ static uint32_t t_last_syn=0;
 static uint32_t last_hs_ts=0;
 
 
+// FID-Sequenz (resetbar)
+static uint8_t g_fid_seq = 1;
+static inline uint8_t next_fid(){ if(g_fid_seq==0 || g_fid_seq>239) g_fid_seq=1; return g_fid_seq++; }
+static inline void reset_fid_seq(){ g_fid_seq = 1; }
 
+// Kleine Helfer
+static inline uint8_t dst_current(){ return stAddr ? stAddr : 0x00; }
 // FW-Retry state
 static bool     fw_ok        = false;   // erst true, wenn Model "DDE..." erkannt
 static uint32_t t_fw_next    = 0;       // nächster Zeitpunkt für FW-Request
@@ -452,6 +466,8 @@ static void reset_link_state(){
   fw_bootstrap_done = false;   // Bootstrap beim neuen Link wieder erlauben
   reset_fid_seq();
   conti_auto_done = false;
+  s_relay = false; s_last_on = 0; relay_write(false);
+  strip.setPixelColor(1, strip.Color(0,0,0,0)); strip.show();
 }
 
 // NAK-Burst-Erkenner (für P01-Handshake)
@@ -558,47 +574,92 @@ static void switch_to_p02_retry(){
 
 
 static void led_status_tick(){
-  // zeitbegrenzte Modi auslaufen lassen → Zustand anhand attach/link wählen
-  if (g_led_mode_until && (int32_t)(millis() - g_led_mode_until) >= 0){
-    g_led_mode_until = 0;
-    // g_attached & link_up sind weiter unten deklariert, hier nur genutzt
-    extern bool g_attached;
-    extern bool link_up;
-    if (!g_attached)      g_led_mode = LED_OFF;
-    else if (link_up)     g_led_mode = LED_SOLID;
-    else                  g_led_mode = LED_BLINK;
-    g_led_mode_since = millis();
-  }
-
-  uint32_t now = millis();
-  switch (g_led_mode){
-    case LED_OFF:
-      digitalWrite(LED_BUILTIN, LOW);
-      break;
-
-    case LED_SOLID:
-      digitalWrite(LED_BUILTIN, HIGH);
-      break;
-
-    case LED_BLINK: {
-      static uint32_t t_last=0;
-      static bool st=false;
-      if (now - t_last >= LED_BLINK_MS){ t_last = now; st = !st; }
-      digitalWrite(LED_BUILTIN, st ? HIGH : LOW);
-      break;
+    uint32_t now = millis();
+    // --- Doppelblinken Ablauf prüfen ---
+    if(g_led_mode == LED_DOUBLE && g_led_mode_until && now > g_led_mode_until){
+        // Doppelblinken vorbei → zurück auf normales Gelbblinken, wenn Station angehängt aber Link down
+        if(g_attached && !link_up){
+            g_led_mode = LED_BLINK;
+            g_led_mode_since = now;
+            g_led_mode_until = 0; // unbegrenzt
+        } else {
+            g_led_mode = LED_OFF;
+            g_led_mode_until = 0;
+        }
     }
 
-    case LED_DOUBLE: {
-      // Muster: ON … OFF … ON … längere Pause
-      uint32_t phase = (now - g_led_mode_since) % LED_DOUBLE_PERIOD;
-      bool on = (phase < LED_DOUBLE_PULSE) ||
-                (phase >= (LED_DOUBLE_PULSE + LED_DOUBLE_GAP) &&
-                 phase <  (LED_DOUBLE_PULSE*2 + LED_DOUBLE_GAP));
-      digitalWrite(LED_BUILTIN, on ? HIGH : LOW);
-      break;
+    // ---------------- LED 0: Verbindung/Link ----------------
+    if (!g_attached){
+        // Rot smooth pulsen
+        float phase = (now % 5000) / 5000.0f; // 1 s period
+        float f = sin(phase * 3.14159f);      // 0..1
+        uint8_t r = (uint8_t)(f * 64);        // Max 64
+        strip.setPixelColor(0, strip.Color(r,0,0,0));
+    } else if (!link_up) {
+        // Gelb normales Blinken: einfach Blink mit Sinus
+        float phase = (now % 1000) / 1000.0f;
+        uint8_t r = (uint8_t)(64 * (phase < 0.5f ? 1.0f : 0.0f));
+        uint8_t g = (uint8_t)(32 * (phase < 0.5f ? 1.0f : 0.0f));
+        strip.setPixelColor(0, strip.Color(r,g,0,0));
     }
-  }
+    else strip.setPixelColor(0, strip.Color(0,64,0,0)); // Grün
+
+    // Doppelblinken bei Linkverlust (LED_DOUBLE) für LED 0
+    if (!link_up && g_led_mode == LED_DOUBLE){
+        uint32_t phase = (now - g_led_mode_since) % LED_DOUBLE_PERIOD;
+        bool on = (phase < LED_DOUBLE_PULSE) ||
+                  (phase >= (LED_DOUBLE_PULSE + LED_DOUBLE_GAP) &&
+                   phase <  (LED_DOUBLE_PULSE*2 + LED_DOUBLE_GAP));
+        if(on) strip.setPixelColor(0, strip.Color(64,32,0,0));
+        else   strip.setPixelColor(0, strip.Color(0,0,0,0));
+    }
+
+    // ---------------- LED 1: Relais / Weiß / Blau ----------------
+    float phase;
+    uint8_t w=0, b=0;
+    const uint8_t MAX_WHITE = 96;
+    const uint8_t MAX_BLUE  = 96;
+
+    if(s_relay){
+        // Blau smooth pulsen über Sinus 0–MAX_BLUE
+        phase = (now % 3000) / 3000.0f; // 1 s period
+        float f = sin(phase * 3.14159f); // 0..1
+        b = (uint8_t)(f * MAX_BLUE);
+    }
+    else if(link_up){
+        // Weiß smooth pulsen über Sinus 0–MAX_WHITE
+        phase = (now % 3000) / 3000.0f; // 1.4 s period
+        float f = sin(phase * 3.14159f); // 0..1
+        w = (uint8_t)(f * MAX_WHITE);
+    }
+
+    strip.setPixelColor(1, strip.Color(0,0,b,w));
+    strip.show();
+
+    // ---------------- Onboard LED ----------------
+    switch (g_led_mode){
+        case LED_OFF: digitalWrite(LED_BUILTIN, LOW); break;
+        case LED_SOLID: digitalWrite(LED_BUILTIN, HIGH); break;
+        case LED_BLINK: {
+            static uint32_t t_last=0; static bool st=false;
+            if(now - t_last >= LED_BLINK_MS){ t_last = now; st = !st; }
+            digitalWrite(LED_BUILTIN, st ? HIGH : LOW);
+            break;
+        }
+        case LED_DOUBLE: {
+            uint32_t phase = (now - g_led_mode_since) % LED_DOUBLE_PERIOD;
+            bool on = (phase < LED_DOUBLE_PULSE) ||
+                      (phase >= (LED_DOUBLE_PULSE + LED_DOUBLE_GAP) &&
+                       phase <  (LED_DOUBLE_PULSE*2 + LED_DOUBLE_GAP));
+            digitalWrite(LED_BUILTIN, on ? HIGH : LOW);
+            break;
+        }
+    }
 }
+
+
+
+
 // ---------------------------------------------------------
 
 static inline bool is_usb_connectstatus_read(uint8_t ctrl){
@@ -658,7 +719,6 @@ static void dump_hex(const char* tag,const uint8_t* b,size_t n){
 
 
 
-
 // ---- P02 framing (inner STX..ETX, XOR-BCC==0; outer DLE STX ... DLE ETX) ----
 static const uint8_t DLE=0x10, STX=0x02, ETX=0x03;
 static inline uint8_t xor_bcc(const uint8_t* d,size_t n){ uint8_t x=0; while(n--) x^=*d++; return x; }
@@ -689,13 +749,9 @@ CP210x CP(&Usb, &cp_async);
 
 
 
-// FID-Sequenz (resetbar)
-static uint8_t g_fid_seq = 1;
-static inline uint8_t next_fid(){ if(g_fid_seq==0 || g_fid_seq>239) g_fid_seq=1; return g_fid_seq++; }
-static inline void reset_fid_seq(){ g_fid_seq = 1; }
 
-// Kleine Helfer
-static inline uint8_t dst_current(){ return stAddr ? stAddr : 0x00; }
+
+
 
 
 
@@ -845,6 +901,7 @@ static void drain_rx(){
 
 static void on_attach_init(){
   Serial.print(F("[ATTACH] CP210x @addr ")); Serial.println(CP.GetAddress());
+  print_bridge_banner();
   cp_reinit_lines();
   delay(ENUM_SETTLE_MS);
   drain_rx();
@@ -852,6 +909,7 @@ static void on_attach_init(){
   t_last_rx_valid = millis();
   led_set_mode(LED_BLINK);  // attached, noch kein Link
   arm_proto_auto(1200);
+  
 }
 
 static void on_detach_cleanup(){
@@ -859,6 +917,11 @@ static void on_detach_cleanup(){
   reset_link_state();       // Keep-Alive aus, alles zurücksetzen
   t_last_rx_valid = 0;
   led_set_mode(LED_OFF);    // komplett aus
+  s_relay   = false;
+  s_last_on = 0;
+  relay_write(false);
+  strip.setPixelColor(1, strip.Color(0,0,0,0)); // LED1 (blau/weiß) aus
+  strip.show();
 }
 
 // --- Firmware Retry Tick (bis Model "DDE..." erkannt) ---
@@ -874,6 +937,45 @@ static void fw_retry_tick(){
     }
     t_fw_next = now + fw_retry_gap;
   }
+}
+
+static void auto_enable_contimode(){
+  if (conti_auto_done || !link_up || !fw_ok) return;
+  if (g_proto == PROTO_P01) return;            // CONTI nur in P02
+
+  // Bitmaske aus Portanzahl: 1→0x01, 2→0x03, 3→0x07, 4→0x0F ...
+  uint8_t n = jbc_decode::g_station_ports;
+  if (n == 0) n = 1;
+  if (n > 8)  n = 8;
+  const uint8_t ports_mask = (uint8_t)((1u << n) - 1u);
+
+  const uint8_t speed = 6;                     // 500 ms
+  uint8_t pl[2] = { speed, ports_mask };       // <-- GENAU 2 BYTES
+
+  const uint8_t dst = dst_current();           // darf 0x00 sein
+
+  switch (g_backend){
+    case BK_HA:
+      send_ctrl(dst, HA_02::M_W_CONTIMODE,   pl, sizeof(pl));
+      break;
+    case BK_SOLD:
+      send_ctrl(dst, SOLD_02::M_W_CONTIMODE, pl, sizeof(pl));
+      break;
+    case BK_PH:
+      send_ctrl(dst, PH_02::M_W_CONTIMODE,   pl, sizeof(pl));
+      break;
+    case BK_SOLD1:
+      send_ctrl(dst, SOLD_01::M_W_CONTIMODE, pl, sizeof(pl));
+      break;
+    default:
+      return; // FE/SF kein CONTI
+  }
+
+  Serial.print(F("[AUTO] CONTIMODE dst=0x")); Serial.print(dst, HEX);
+  Serial.print(F(" ports=0x")); Serial.print(ports_mask, HEX);
+  Serial.print(F(" speed=")); Serial.println(speed);
+
+  conti_auto_done = true;
 }
 
 // Decoder
@@ -894,6 +996,7 @@ static void on_inner_frame(const uint8_t* f,size_t n){
       g_proto = PROTO_P02;                      // hochstufen auf P02
       hs_seen = true; link_up = true;
       if (src_p02) stAddr = src_p02;
+      print_bridge_banner();
       Serial.print(F("[HS] from 0x")); Serial.println(src_p02, HEX);
       send_hs_ack(dst_current());
       led_set_mode(LED_SOLID);
@@ -1075,44 +1178,7 @@ static void on_inner_frame(const uint8_t* f,size_t n){
   if (dec_print_with_fid(fid, g_backend, ctrl, d, len)) return;
 }
 
-static void auto_enable_contimode(){
-  if (conti_auto_done || !link_up || !fw_ok) return;
-  if (g_proto == PROTO_P01) return;            // CONTI nur in P02
 
-  // Bitmaske aus Portanzahl: 1→0x01, 2→0x03, 3→0x07, 4→0x0F ...
-  uint8_t n = jbc_decode::g_station_ports;
-  if (n == 0) n = 1;
-  if (n > 8)  n = 8;
-  const uint8_t ports_mask = (uint8_t)((1u << n) - 1u);
-
-  const uint8_t speed = 6;                     // 500 ms
-  uint8_t pl[2] = { speed, ports_mask };       // <-- GENAU 2 BYTES
-
-  const uint8_t dst = dst_current();           // darf 0x00 sein
-
-  switch (g_backend){
-    case BK_HA:
-      send_ctrl(dst, HA_02::M_W_CONTIMODE,   pl, sizeof(pl));
-      break;
-    case BK_SOLD:
-      send_ctrl(dst, SOLD_02::M_W_CONTIMODE, pl, sizeof(pl));
-      break;
-    case BK_PH:
-      send_ctrl(dst, PH_02::M_W_CONTIMODE,   pl, sizeof(pl));
-      break;
-    case BK_SOLD1:
-      send_ctrl(dst, SOLD_01::M_W_CONTIMODE, pl, sizeof(pl));
-      break;
-    default:
-      return; // FE/SF kein CONTI
-  }
-
-  Serial.print(F("[AUTO] CONTIMODE dst=0x")); Serial.print(dst, HEX);
-  Serial.print(F(" ports=0x")); Serial.print(ports_mask, HEX);
-  Serial.print(F(" speed=")); Serial.println(speed);
-
-  conti_auto_done = true;
-}
 
 
 
@@ -1164,6 +1230,11 @@ static void link_watchdog_tick(){
   if (now - t_last_rx_valid > RX_SILENCE_MS){
     Serial.println(F("[LINK] RX silence → drop link, reinit, wait for HS"));
     led_set_mode(LED_DOUBLE, 5000);   // 5s Doppel-Blink als „Link abgebrochen“
+    s_relay   = false;
+    s_last_on = 0;
+    relay_write(false);
+    strip.setPixelColor(1, strip.Color(0,0,0,0));
+    strip.show();
     reset_link_state();
     cp_reinit_lines();
     drain_rx();
@@ -1388,6 +1459,11 @@ static void cli_tick_dual()
 }
 
 
+void led_init() {
+    pinMode(LED_BUILTIN, OUTPUT);
+    strip.begin();
+    strip.show(); // alle LEDs aus
+}
 
 
 
@@ -1402,6 +1478,12 @@ void setup(){
   led_set_mode(LED_OFF);
   pinMode(RELAY_PIN, OUTPUT);
   relay_write(false);   // sicher AUS
+
+  strip.begin();
+  strip.show(); // alle LEDs aus
+
+  
+
   cfg_load();
   Serial.print(F("[CFG] USB ':C' auto=")); Serial.println(auto_usb_c ? F("ON") : F("OFF"));
   Serial.print(F("[CFG] CONTIMODE logs=")); Serial.println(show_contisend ? F("ON") : F("OFF"));  // NEU

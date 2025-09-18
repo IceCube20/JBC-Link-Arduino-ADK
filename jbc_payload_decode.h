@@ -1234,7 +1234,7 @@ static bool decode_ha_extras(Backend be, uint8_t ctrl, const uint8_t* d, uint8_t
   if (ctrl==HA_02::M_R_AIRFLOW || ctrl==HA_02::M_R_POWER){
     if (len < 2){ print_hdr_line(be, (ctrl==HA_02::M_R_AIRFLOW)?F("M_R_AIRFLOW"):F("M_R_POWER")); kv_s(F("raw"), hex_string(d,len)); Serial.println(); return true; }
     uint16_t ppm=u16le(d); if(ppm>1000) ppm=1000;
-    print_hdr_line(be, (ctrl==HA_02::M_R_AIRFLOW)?F("AIRFLOW"):F("POWER"));
+    print_hdr_line(be, (ctrl==HA_02::M_R_AIRFLOW)?F("AIRFLOW"):F("M_R_POWER"));
     kv_c(F("pct"), ppm/10.0f, 1); kv_u(F("raw"), ppm); Serial.println(); return true;
   }
 
