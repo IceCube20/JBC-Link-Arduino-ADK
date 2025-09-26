@@ -65,8 +65,7 @@ SYN ON | SYN OFF     # Show/hide keep-alive frames
 FID ON | FID OFF     # Show/hide frame IDs in logs
 USBCLI ON | OFF      # Allow/deny TX from USB console
 
-### Example JBC Commands
-```text
+Example JBC Commands
 M_INF_PORT 0
 M_R_DEVICEIDORIGINAL
 M_R_SLEEPTEMP 0 2
