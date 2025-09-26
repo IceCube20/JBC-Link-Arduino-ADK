@@ -16,6 +16,16 @@ The bridge transparently monitors the station communication, automatically detec
 
 ---
 
+## Wiring Diagram
+
+<p align="center">
+  <img src="assets/jbc_link_wiring.png" alt="JBC Link wiring diagram" width="900">
+</p>
+
+<sub>SVG version available at <code>assets/jbc_link_wiring.svg</code>.</sub>
+
+---
+
 ## Features
 
 - **Strictly passive**: no TX before the first valid frame/handshake  
@@ -55,3 +65,9 @@ SYN ON | SYN OFF     # Show/hide keep-alive frames
 FID ON | FID OFF     # Show/hide frame IDs in logs
 USBCLI ON | OFF      # Allow/deny TX from USB console
 
+M_INF_PORT 0
+M_R_DEVICEIDORIGINAL
+M_R_SLEEPTEMP 0 2
+M_R_FIRMWARE
+M_R_UID
+All Commands find in jbc_console_map.h
