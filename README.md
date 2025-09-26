@@ -56,6 +56,7 @@ SYN ON | SYN OFF     # Show/hide keep-alive frames
 FID ON | FID OFF     # Show/hide frame IDs in logs
 CONTISEND ON | OFF   # Show/hide Contisend frames in logs
 USBCLI ON | OFF      # Allow/deny TX from USB console
+USBAUTO ON | USBAUTO OFF  # Automatic set M_USB_CONNECTSTATUS :C by default for Controlmode Write Commands
 
 Example JBC Commands
 M_INF_PORT 0
