@@ -61,4 +61,5 @@ M_INF_PORT 0
 M_R_DEVICEIDORIGINAL
 M_R_SLEEPTEMP 0 2
 M_R_FIRMWARE
-M_R_UID
+M_R_STATERROR
+All JBC Commands find in jbc_console_map.h
