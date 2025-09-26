@@ -9,20 +9,20 @@ The bridge transparently monitors the station communication, automatically detec
 ## Block Diagram
 
 <p align="center">
-  <img src="assets/jbc_link_blockdiagram_pins.png" alt="JBC Link block diagram with D6 SK6812 LEDs and D7 Relay outputs" width="900">
+  <img src="jbc_link_blockdiagram_pins.png" alt="JBC Link block diagram with D6 SK6812 LEDs and D7 Relay outputs" width="900">
 </p>
 
-<sub>SVG version available at <code>assets/jbc_link_blockdiagram_pins.svg</code>.</sub>
+<sub>SVG version available at <code>jbc_link_blockdiagram_pins.svg</code>.</sub>
 
 ---
 
 ## Wiring Diagram
 
 <p align="center">
-  <img src="assets/jbc_link_wiring.png" alt="JBC Link wiring diagram" width="900">
+  <img src="jbc_link_wiring.png" alt="JBC Link wiring diagram" width="900">
 </p>
 
-<sub>SVG version available at <code>assets/jbc_link_wiring.svg</code>.</sub>
+<sub>SVG version available at <code>jbc_link_wiring.svg</code>.</sub>
 
 ---
 
@@ -65,9 +65,10 @@ SYN ON | SYN OFF     # Show/hide keep-alive frames
 FID ON | FID OFF     # Show/hide frame IDs in logs
 USBCLI ON | OFF      # Allow/deny TX from USB console
 
+### Example JBC Commands
+```text
 M_INF_PORT 0
 M_R_DEVICEIDORIGINAL
 M_R_SLEEPTEMP 0 2
 M_R_FIRMWARE
 M_R_UID
-All Commands find in jbc_console_map.h
