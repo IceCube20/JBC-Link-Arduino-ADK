@@ -54,6 +54,7 @@ LOG ON | LOG OFF     # Enable/disable protocol logging
 HEX ON | HEX OFF     # Enable/disable hex frame dump
 SYN ON | SYN OFF     # Show/hide keep-alive frames
 FID ON | FID OFF     # Show/hide frame IDs in logs
+CONTISEND ON | OFF   # Show/hide Contisend frames in logs
 USBCLI ON | OFF      # Allow/deny TX from USB console
 
 Example JBC Commands
