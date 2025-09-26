@@ -6,15 +6,6 @@ The bridge transparently monitors the station communication, automatically detec
 
 ---
 
-## Block Diagram
-
-<p align="center">
-  <img src="jbc_link_blockdiagram_pins.png" alt="JBC Link block diagram with D6 SK6812 LEDs and D7 Relay outputs" width="900">
-</p>
-
-<sub>SVG version available at <code>jbc_link_blockdiagram_pins.svg</code>.</sub>
-
----
 
 ## Wiring Diagram
 
