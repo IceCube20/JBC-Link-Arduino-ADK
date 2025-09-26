@@ -2,7 +2,8 @@
   // SPDX-License-Identifier: MIT OR GPL-2.0-only
 
   English:
-  I'm not a programmer; this was created with the help of ChatGPT. It may contain errors. Tested with DDE and JTSE.
+  I'm not a programmer; this was created with the help of ChatGPT. It may contain errors.
+  Tested with DDE and JTSE.
   --------------------------------------
   Passive JBC–USB bridge for CP210x (500000 baud, 8E1) with dual console,
   CLI mapping, and pretty print/decoder. Supports protocol P02 and P01 (auto).
@@ -10,28 +11,33 @@
   Key features
   ------------
   • STRICT PASSIVE: Do not transmit before handshake / first valid frame.
-  • Protocol auto-detection:
-      - P02: detected by BASE::M_HS handshake (fid=253) → reply HS-ACK {BASE::M_ACK}.
+  • Protocol auto-detection & link management:
+      - P02: detected by BASE::M_HS (fid=253) → reply HS-ACK {BASE::M_ACK} → link UP.
       - P01: fallback after ~1.2 s without HS OR when a NAK burst occurs
-             (≥4 NAKs within 50 ms). Link is considered UP once a valid P01 frame arrives.
-  • Unified TX: All JBC transmissions go through send_ctrl_by_proto(), which uses
+             (≥4 NAKs within 50 ms). Link becomes UP on first valid P01 frame.
+      - Upgrade: while running P01, if a P02 HS appears later, auto-upgrade to P02.
+      - FIDs advance per frame (P02) and reset on new link.
+  • Unified TX: All JBC transmissions go through send_ctrl_by_proto(), which builds
                 P02 (with FID) or P01 (without FID) depending on g_proto.
   • Keep-alive: BASE::M_SYN every 500 ms while link is UP (P01 & P02).
   • Firmware bootstrap (both protocols):
-      After link-up, repeatedly request BASE::M_FIRMWARE until model string contains
-      “DDE…”. Then set backend, read DEVICENAME, and request UID exactly once (no retry).
+      After link-up, request BASE::M_FIRMWARE until the model string is known.
+      Then set backend, read DEVICENAME, and request UID exactly once (no retry).
   • USB status (P02 only):
       Single delayed write (~5 s after FW) to set ':C' via family-specific
       M_W_USB_CONNECTSTATUS — only if not already ':C'.
   • Hotplug: Detect CP210x attach/detach → reinit lines, drain RX, reset state,
-      wait passively for a new link.
-  • RX silence watchdog: If no valid frames arrive after link-up, drop link,
-      reinit, and wait passively again.
-  • LED (pin 13): OFF=detached, BLINK=attached/no link, SOLID=link up,
-      DOUBLE=link lost (short period).
-  • Framing:
-      P02: inner STX..ETX (SRC,DST,FID,CTRL,LEN,DATA,BCC==0), wrapped with DLE-STX/ETX.
-      P01: inner STX..ETX (SRC,DST,    CTRL,LEN,DATA,BCC==0), wrapped with DLE-STX/ETX.
+      and wait passively for a new link.
+  • RX-silence watchdog: If no valid frames arrive after link-up (~3 s),
+      drop link, reinit, and wait passively again.
+  • LED (pin 13): OFF = detached, BLINK = attached/no link,
+      SOLID = link up, DOUBLE = link lost (short period).
+  • Framing & integrity:
+      - Outer link layer: DLE STX ... DLE ETX with DLE byte-stuffing.
+      - Inner frame (XOR-BCC==0 required):
+          P02: STX SRC DST FID CTRL LEN DATA... BCC ETX
+          P01: STX SRC DST     CTRL LEN DATA... BCC ETX
+      - Parser enforces minimum inner length (P01 ≥7, P02 ≥8).
 
   Dual console (important)
   ------------------------
@@ -52,58 +58,65 @@
   • CLI echo shows real FIDs and backend tag ([SOLD_CLI_SEND] …).
     For P01, FID=0 is logged as a placeholder.
   • Optional byte logging: CLI_DEBUG_RX (0/1).
-  • Non-ASCII: CLI passes bytes >= 0x80 unchanged; supports Backspace/DEL, CR/LF.
+  • Non-ASCII: CLI passes bytes ≥0x80; supports Backspace/DEL and CR/LF.
 
   Tuning / defines
   ----------------
   • SERIAL_BAUD=250000 (console), CP210x fixed 500000 8E1.
   • KEEPALIVE_MS=500, RX_SILENCE_MS=3000, ENUM_SETTLE_MS=800, USB_SET_DELAY_MS=5000.
-  • FW retry backoff: 250..2000 ms until model “DDE…” is detected.
-
+  • FW retry backoff: 250..2000 ms until model is detected.
+  • P01 detection thresholds: NAK_BURST_N=4, NAK_BURST_MS=50 (adjustable).
 
   Compatibility & notes
   ---------------------
-  • P01 has no HS/FID fields; hence the USB_CONNECTSTATUS sequence is P02-only.
-  • Station address (stAddr) is learned from meaningful frames (e.g., FIRMWARE,
-    DEVICEID, SYN/HS). For P01 the field layout is shifted accordingly.
-  • Parser checks minimum inner-frame length per protocol (P01: ≥7, P02: ≥8)
-    and requires XOR-BCC==0.
+  • P01 has no HS/FID fields; the USB_CONNECTSTATUS write is P02-only.
+  • Station address (stAddr) is learned from meaningful frames (FIRMWARE,
+    DEVICEID, SYN/HS). Field layout is shifted for P01.
+  • Broadcast frames and address learning are handled safely in passive mode.
 
   Dependencies
   ------------
   • Usb.h, usbhub.h, CP210x.h
   • jbc_commands_full.h, jbc_cmd_names.h, jbc_payload_decode.h, jbc_console_map.h
 
+
   Deutsch:
-  Ich bin keine Programmierer, wurde mit Hilfe von ChatGPT erstellt. Es können Fehler vorhanden sein. Getestet mit DDE und JTSE
+  Ich bin kein Programmierer; das wurde mit Hilfe von ChatGPT erstellt. Es können Fehler vorhanden sein.
+  Getestet mit DDE und JTSE.
   --------------------------------------
   Passive JBC-USB-Bridge für CP210x (500000 Baud, 8E1) mit Dual-Konsole,
-  CLI-Mapping und Pretty-Print/Decoder. Unterstützt P02 und P01 (auto).
+  CLI-Mapping und Pretty-Print/Decoder. Unterstützt P02 und P01 (Auto).
 
   Kerneigenschaften
   -----------------
   • STRICT PASSIVE: Vor Handshake/erstem gültigen Frame wird NICHT gesendet.
-  • Protokoll-Autodetektion:
-      - P02: erkannt am Handshake BASE::M_HS (fid=253) → HS-ACK mit {BASE::M_ACK}.
-      - P01: Fallback nach ~1.2 s ohne HS ODER bei NAK-Burst (≥4 NAK in 50 ms).
+  • Protokoll-Autodetektion & Link-Verwaltung:
+      - P02: erkannt am Handshake BASE::M_HS (fid=253) → HS-ACK mit {BASE::M_ACK} → Link UP.
+      - P01: Fallback nach ~1,2 s ohne HS ODER bei NAK-Burst (≥4 NAK in 50 ms).
               Link gilt als UP, sobald ein gültiges P01-Frame empfangen wurde.
-  • Unified TX: Alle JBC-Sends laufen über send_ctrl_by_proto(), das je nach
-                erkanntem Protokoll P02 (mit FID) oder P01 (ohne FID) verwendet.
-  • Keep-Alive: BASE::M_SYN alle 500 ms solange Link UP (P01 & P02).
+      - Upgrade: Läuft P01 und später kommt ein P02-HS, automatische Hochstufung auf P02.
+      - FIDs laufen pro Frame (P02) und werden bei neuem Link zurückgesetzt.
+  • Unified TX: Alle JBC-Sends laufen über send_ctrl_by_proto() und bauen
+                je nach g_proto P02 (mit FID) oder P01 (ohne FID).
+  • Keep-Alive: BASE::M_SYN alle 500 ms, solange Link UP (P01 & P02).
   • Firmware-Bootstrap (beide Protokolle):
-      Nach Linkstart nur BASE::M_FIRMWARE anfragen, bis Model „DDE…“ erkannt ist.
-      Dann Backend setzen, DEVICENAME lesen und UID EINMAL anfragen (ohne Retry).
-  • USB-Status (nur P02): Einmalig, verzögert nach FW (~5 s), auf ':C' setzen
-      (familienabhängiger M_W_USB_CONNECTSTATUS) — nur, wenn nicht bereits ':C'.
-  • Hotplug: CP210x-Attach/Detach wird erkannt → Leitungen reinit, RX drain,
-      State reset, passiv auf neuen Link warten.
-  • RX-Silence-Watchdog: Wenn nach Link keine gültigen Frames mehr kommen,
-      Link droppen, reinit, passiv warten.
-  • LED-Status (Pin 13): OFF=detached, BLINK=attached/kein Link,
-      SOLID=Link up, DOUBLE=Link verloren (kurzzeitig).
-  • Framing:
-      P02: inner STX..ETX (SRC,DST,FID,CTRL,LEN,DATA,BCC==0), in DLE-STX/ETX gekapselt.
-      P01: inner STX..ETX (SRC,DST,    CTRL,LEN,DATA,BCC==0), in DLE-STX/ETX gekapselt.
+      Nach Linkstart BASE::M_FIRMWARE anfragen, bis das Modell bekannt ist.
+      Danach Backend setzen, DEVICENAME lesen und UID genau einmal anfragen (ohne Retry).
+  • USB-Status (nur P02):
+      Einmalig, ca. 5 s nach FW, ':C' setzen (familienabhängiger M_W_USB_CONNECTSTATUS) —
+      nur, wenn nicht bereits ':C'.
+  • Hotplug: CP210x-Attach/Detach erkennen → Leitungen re-initialisieren, RX leeren,
+      State resetten und wieder passiv auf neuen Link warten.
+  • RX-Silence-Watchdog: Kommen nach Link-Up ~3 s keine gültigen Frames,
+      Link droppen, re-init, passiv warten.
+  • LED-Status (Pin 13): OFF = getrennt, BLINK = verbunden/kein Link,
+      SOLID = Link up, DOUBLE = Link verloren (kurz).
+  • Framing & Integrität:
+      - Äußere Hülle: DLE STX … DLE ETX mit DLE-Bytestuffing.
+      - Inneres Frame (XOR-BCC==0 zwingend):
+          P02: STX SRC DST FID CTRL LEN DATA… BCC ETX
+          P01: STX SRC DST     CTRL LEN DATA… BCC ETX
+      - Parser erzwingt Mindestlänge (P01 ≥7, P02 ≥8).
 
   Dual-Konsole (wichtig)
   ----------------------
@@ -111,11 +124,11 @@
   • Eingaben werden von beiden Ports gelesen und mit Präfix geloggt:
       [USB UART] bzw. [S1 UART].
   • Mega/ADK: TX1=18, RX1=19.
-  • WICHTIG: Nur mit Arduino MEGA 2560 ADK oder Arduino MEGA 2560 mit USB Host Shield 2.0 Kompatibel
+  • WICHTIG: Nur Arduino MEGA 2560 ADK oder Arduino MEGA 2560 mit USB Host Shield 2.0 kompatibel.
 
   CLI & Logging
   -------------
-  • Text-CLI mit Mapping (jbc_console_map.h) auf (ctrl,payload) pro Backend.
+  • Text-CLI mit Mapping (jbc_console_map.h) auf (ctrl,payload) je Backend.
     Beispiele:  M_INF_PORT 0
                 M_R_DEVICEIDORIGINAL
                 M_R_SLEEPTEMP 0 2
@@ -123,33 +136,32 @@
                     SYN ON/OFF, FID ON/OFF, USBCLI ON/OFF.
   • USBCLI: Standardmäßig ist Senden über USB gesperrt (read-only).
             Mit „USBCLI ON“ freigeben.
-  • CLI-Echo zeigt echte FIDs (bei P01 wird FID=0 als Platzhalter geloggt) und
-    Backend-Tag ([SOLD_CLI_SEND] …).
-  • Optionales Byte-Logging CLI_DEBUG_RX (0/1).
-  • Nicht-ASCII/Sonderzeichen: CLI lässt Bytes >= 0x80 passieren, Backspace/DEL,
-    CR/LF unterstützt.
+  • CLI-Echo zeigt echte FIDs und Backend-Tag ([SOLD_CLI_SEND] …).
+    Bei P01 wird FID=0 als Platzhalter geloggt.
+  • Optionales Byte-Logging: CLI_DEBUG_RX (0/1).
+  • Nicht-ASCII/Sonderzeichen: CLI lässt Bytes ≥0x80 passieren; Backspace/DEL,
+    CR/LF werden unterstützt.
 
   Tuning/Defines
   --------------
   • SERIAL_BAUD=250000 (Konsole), CP210x fix 500000 8E1.
-  • KEEPALIVE_MS=500, RX_SILENCE_MS=3000, ENUM_SETTLE_MS=800,
-    USB_SET_DELAY_MS=5000.
-  • FW-Retry Backoff: 250..2000 ms bis Model „DDE…“.
-
+  • KEEPALIVE_MS=500, RX_SILENCE_MS=3000, ENUM_SETTLE_MS=800, USB_SET_DELAY_MS=5000.
+  • FW-Retry-Backoff: 250..2000 ms bis Modell erkannt ist.
+  • P01-Erkennungsschwellen: NAK_BURST_N=4, NAK_BURST_MS=50 (anpassbar).
 
   Kompatibilität & Hinweise
   -------------------------
-  • P01 hat keine HS/FID-Felder; USB_CONNECTSTATUS-Sequenz wird daher nur in P02
-    verwendet (READ/WRITE-ACKs sind P02-only).
-  • Adresse (stAddr) wird aus sinnvollen Frames gelernt (u. a. FIRMWARE,
-    DEVICEID, SYN/HS). Bei P01 gilt die verschobene Feldstruktur.
-  • Parser prüft Mindestlänge pro Protokoll (P01: ≥7, P02: ≥8) und XOR-BCC==0.
+  • P01 hat keine HS/FID-Felder; USB_CONNECTSTATUS-Schreibsequenz ist daher P02-only.
+  • Adresse (stAddr) wird aus sinnvollen Frames gelernt (z. B. FIRMWARE,
+    DEVICEID, SYN/HS). Für P01 gilt die verschobene Feldstruktur.
+  • Broadcast-Frames und Address-Learning arbeiten sicher im Passivmodus.
 
   Abhängigkeiten
   --------------
   • Usb.h, usbhub.h, CP210x.h
   • jbc_commands_full.h, jbc_cmd_names.h, jbc_payload_decode.h, jbc_console_map.h
 */
+
 
 
 
@@ -264,7 +276,7 @@ Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRBW + NEO_KHZ800);
 
 // ---- Bridge-Info ----
 #ifndef BRIDGE_FW
-#define BRIDGE_FW    "V4.10.9beta"                 
+#define BRIDGE_FW    "V4.11.0RC"                 
 #endif
 #ifndef BRIDGE_HW
 #define BRIDGE_HW    "Arduino MEGA ADK"     
@@ -515,14 +527,14 @@ static inline void led_set_mode(LedMode m, uint32_t duration_ms=0){
 }
 
 static void print_bridge_banner(){
-  Serial.println(F("\n[JBC Link CP210x to USB by IceCube20]"));
+  Serial.println(F("\n[JBC USB Link zu Arduino by IceCube20]"));
 
   Serial.print(F("[BRIDGE] fw="));   Serial.print(BRIDGE_FW);
   Serial.print(F(" hw="));           Serial.print(BRIDGE_HW);
   Serial.print(F(" mcu="));          Serial.print(mcu_name());
   Serial.print(F(" @"));             Serial.print(F_CPU/1000000); Serial.print(F("MHz"));
   Serial.print(F(" uart="));         Serial.print(SERIAL_BAUD);
-  Serial.print(F(" author="));       Serial.print(BRIDGE_AUTHOR);   // <<< NEU
+  Serial.print(F(" author="));       Serial.print(BRIDGE_AUTHOR);   
   Serial.print(F(" build="));        Serial.print(__DATE__); Serial.print(' '); Serial.print(__TIME__);
   Serial.println();
 }
@@ -745,16 +757,6 @@ CP210x CP(&Usb, &cp_async);
 
 
 
-
-
-
-
-
-
-
-
-
-
 static void build_p02(uint8_t src,uint8_t dst,uint8_t fid,uint8_t ctrl,
                       const uint8_t* data,uint8_t len,
                       uint8_t* inner,size_t &in_len){
@@ -887,7 +889,7 @@ static void cp_reinit_lines(){
   CP.SetStopBits(CP210X_STOP_BITS_1);
   CP.SetFlowControl(CP210X_FLOW_CONTROL_OFF);
   delay(5);
-  Serial.println(F("[CP210x] Reinit lines: 500000 8E1, FC=OFF"));
+  Serial.println(F("[CP210x] Reinit"));
 }
 
 static void drain_rx(){

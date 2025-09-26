@@ -9,12 +9,12 @@ using namespace jbc_cmd;
 
 namespace jbc_decode {
 
-  // Globals (defined in the .ino)
+  
   extern bool g_log_show_fid;
   extern int  g_log_cur_fid;
-  extern bool g_log_show_syn;        // <-- moved inside the namespace
+  extern bool g_log_show_syn;        
   extern uint8_t g_station_ports;
-  extern bool g_show_conti_send;  // aus .ino definiert
+  extern bool g_show_conti_send;  
   static inline void set_current_fid(int fid){ g_log_cur_fid = fid; }
 // Relais-Hook: im .ino definiert
 void jbc_conti_signal(bool on);
@@ -60,7 +60,7 @@ static inline bool is_nack_ctrl(uint8_t ctrl){
       || ctrl == FE_02::M_NACK   || ctrl == SF_02::M_NACK;
 }
 
-// Model-Kürzel -> Portanzahl (wie JBC Connect per Tabelle)
+// Model-Kürzel
 static inline uint8_t ports_for_model_tag(const String& model){
   if (model=="DM" || model=="DME" || model=="PSE" || model=="F4W") return 4;     // 4 Ports
   if (model=="DDE"|| model=="DD"  || model=="DDR"|| model=="NA" || model=="NAE" || model=="F2") return 2; // 2 Ports
@@ -332,7 +332,7 @@ static const __FlashStringHelper* typeofground_name(uint8_t v){
 
 
 // ---------- Tool-Code → Name ----------
-static const __FlashStringHelper* tool_name_from_code(uint8_t code){
+static const __FlashStringHelper* sold_tool_name(uint8_t code){
   switch(code){
     case 0:  return F("NOTOOL");
     case 1:  return F("T210");
@@ -672,7 +672,7 @@ static bool decode_connecttool(Backend be, uint8_t ctrl, const uint8_t* d, uint8
 
     const __FlashStringHelper* tn = nullptr;
     if (be == BK_HA) tn = ha_tool_name(code);
-    else             tn = tool_name_from_code(code);
+    else             tn = sold_tool_name(code);
 
     print_hdr_line(be, F("M_R_CONNECTTOOL"));
     kv_hex(F("code"), code, 2);
@@ -684,7 +684,7 @@ static bool decode_connecttool(Backend be, uint8_t ctrl, const uint8_t* d, uint8
 }
 
 // Gibt die SOLD-Flags als "NAME|NAME|…" oder "NONE" zurück (keine Ausgabe!)
-static String sold_flags_to_string(uint8_t f){
+static String sold_status_to_string(uint8_t f){
   String out; auto add=[&](const char* n){ if(out.length()) out+='|'; out+=n; };
   if (f & 0x01) add("STAND");
   if (f & 0x02) add("SLEEP");
@@ -722,9 +722,9 @@ static String sold_statustool_bits_to_string(uint16_t v){
   if (v & 0x0002) add("SLEEP");
   if (v & 0x0004) add("HIBERNATION");
   if (v & 0x0008) add("EXTRACTOR");
-  if (v & 0x0010) add("DESOLDER");        // (falls jemals gesetzt)
-  if (v & 0x0020) add("PORT_LOCKED");     // dein beobachtetes Bit5
-  if (v & 0x0100) add("DESOLDER_TOOL");   // dein beobachtetes Bit8 (DR-Tool)
+  if (v & 0x0010) add("DESOLDER");        
+  if (v & 0x0020) add("PORT_LOCKED");     
+  if (v & 0x0100) add("DESOLDER_TOOL");   
 
   // Unbekannte gesetzte Bits ergänzen
   const uint16_t known = 0x0001|0x0002|0x0004|0x0008|0x0010|0x0020|0x0100;
@@ -817,7 +817,7 @@ static bool decode_sold_extras(Backend be, uint8_t ctrl, const uint8_t* d, uint8
     if (len >= 13){
       uint8_t port=d[11], tool=d[12];
       kv_u(F("port"), port); kv_u(F("tool"), tool);
-      if (const __FlashStringHelper* tn = tool_name_from_code(tool)) kv_fs(F("tool_name"), tn);
+      if (const __FlashStringHelper* tn = sold_tool_name(tool)) kv_fs(F("tool_name"), tn);
     }
     Serial.println();
     return true;
@@ -840,7 +840,7 @@ static bool decode_sold_extras(Backend be, uint8_t ctrl, const uint8_t* d, uint8
     kv_u(F("family"), family);
     kv_u(F("port"), port);
     kv_u(F("tool"), tool);
-    if (const __FlashStringHelper* tn = tool_name_from_code(tool)) kv_fs(F("tool_name"), tn);
+    if (const __FlashStringHelper* tn = sold_tool_name(tool)) kv_fs(F("tool_name"), tn);
     Serial.println();
     return true;
   }
@@ -853,7 +853,7 @@ static bool decode_sold_extras(Backend be, uint8_t ctrl, const uint8_t* d, uint8
     kv_u(F("on"),  d[1]);
     kv_u(F("port"),d[2]);
     kv_u(F("tool"),d[3]);
-    if (const __FlashStringHelper* tn = tool_name_from_code(d[3])) kv_fs(F("tool_name"), tn);
+    if (const __FlashStringHelper* tn = sold_tool_name(d[3])) kv_fs(F("tool_name"), tn);
     Serial.println();
     return true;
   }
@@ -865,7 +865,7 @@ static bool decode_sold_extras(Backend be, uint8_t ctrl, const uint8_t* d, uint8
     print_hdr_line(be, F("M_R_SLEEPTEMP"));
     uint16_t v=u16le(d); kv_c(F("c"), uti_to_c(v), 1); kv_hex(F("uti"), v, 4);
     kv_u(F("port"), d[2]); kv_u(F("tool"), d[3]);
-    if (const __FlashStringHelper* tn = tool_name_from_code(d[3])) kv_fs(F("tool_name"), tn);
+    if (const __FlashStringHelper* tn = sold_tool_name(d[3])) kv_fs(F("tool_name"), tn);
     Serial.println(); return true;
   }
 
@@ -874,7 +874,7 @@ static bool decode_sold_extras(Backend be, uint8_t ctrl, const uint8_t* d, uint8
     print_hdr_line(be, F("M_R_AJUSTTEMP"));
     kv_c(F("delta_c"), (int16_t)u16le(d)/9.0f, 1);
     kv_u(F("port"), d[2]); kv_u(F("tool"), d[3]);
-    if (const __FlashStringHelper* tn = tool_name_from_code(d[3])) kv_fs(F("tool_name"), tn);
+    if (const __FlashStringHelper* tn = sold_tool_name(d[3])) kv_fs(F("tool_name"), tn);
     Serial.println(); return true;
   }
 
@@ -1629,7 +1629,7 @@ static bool decode_conti_burst(Backend be, const uint8_t* d, uint8_t len){
             //kv_u(F("power_raw"), pwrPpm);
           }
           kv_hex(F("flags"),   flags,   2);
-          kv_s  (F("flags_bits"), sold_flags_to_string(flags));
+          kv_s  (F("flags_bits"), sold_status_to_string(flags));
           kv_hex(F("changes"), changes, 2);
           if (changes) kv_s(F("changes_bits"), sold_changes_to_string(changes));
           Serial.println();
@@ -1754,7 +1754,7 @@ static bool decode_write_acks(Backend be, uint8_t ctrl, const uint8_t* d, uint8_
     if (len >= 2){ Serial.print(F(" port=")); Serial.print(d[1]); }
     if (len >= 3){
       Serial.print(F(" tool=")); Serial.print(d[2]);
-      if (const __FlashStringHelper* tn = tool_name_from_code(d[2])){
+      if (const __FlashStringHelper* tn = sold_tool_name(d[2])){
         Serial.print(F(" (")); Serial.print(tn); Serial.print(')');
       }
     }
@@ -1928,7 +1928,7 @@ static bool decode_write_acks(Backend be, uint8_t ctrl, const uint8_t* d, uint8_
     if (len >= 3) {
       Serial.print(F(" tool=")); Serial.print(d[2]);
       if (const __FlashStringHelper* tn =
-            (be==BK_HA ? ha_tool_name(d[2]) : tool_name_from_code(d[2]))){
+            (be==BK_HA ? ha_tool_name(d[2]) : sold_tool_name(d[2]))){
         Serial.print(F(" (")); Serial.print(tn); Serial.print(')');
       }
     }
@@ -1975,7 +1975,7 @@ static bool decode_nack(Backend be, uint8_t ctrl, const uint8_t* d, uint8_t len)
     // optional Toolname je Familie
     const __FlashStringHelper* tn =
         (be==BK_HA)   ? ha_tool_name(tool) :
-        (be==BK_SOLD || be==BK_SOLD1) ? tool_name_from_code(tool) : nullptr;
+        (be==BK_SOLD || be==BK_SOLD1) ? sold_tool_name(tool) : nullptr;
     if (tn) kv_fs(F("tool_name"), tn);
   }
   // alles darüber als Tail anzeigen
@@ -2183,7 +2183,7 @@ static bool decode_inf_port(Backend be, uint8_t ctrl, const uint8_t* d, uint8_t 
     const uint8_t  flags8    = (len >= 11) ? d[10] : 0;
 
     print_hdr_line(be, F("M_INF_PORT"));
-    if (const __FlashStringHelper* tn = tool_name_from_code(tool)) kv_fs(F("tool"), tn); else kv_u(F("tool_code"), tool);
+    if (const __FlashStringHelper* tn = sold_tool_name(tool)) kv_fs(F("tool"), tn); else kv_u(F("tool_code"), tool);
     kv_c(F("temp_c"),  uti_to_c(tempUTI),1);
     kv_c(F("ext_tc_c"),uti_to_c(extTcUTI),1);
     kv_u(F("heater_raw"), heaterRaw);
@@ -2206,7 +2206,7 @@ static bool decode_inf_port(Backend be, uint8_t ctrl, const uint8_t* d, uint8_t 
   const uint16_t tip2UTI = u16le(&d[4]);
 
   print_hdr_line(be, F("M_INF_PORT"));
-  if (const __FlashStringHelper* tn = tool_name_from_code(tool)) kv_fs(F("tool"), tn); else kv_u(F("tool_code"), tool);
+  if (const __FlashStringHelper* tn = sold_tool_name(tool)) kv_fs(F("tool"), tn); else kv_u(F("tool_code"), tool);
   kv_u(F("tool_err"), toolErr);
   if (const __FlashStringHelper* te = tool_error_name_fam(be, toolErr)) kv_fs(F("tool_err_name"), te);
   kv_c(F("tip1_c"), uti_to_c(tip1UTI), 1);
@@ -2223,7 +2223,7 @@ static bool decode_inf_port(Backend be, uint8_t ctrl, const uint8_t* d, uint8_t 
     if (len >= 11) {
       const uint8_t flags8 = d[10];
       kv_hex(F("flags"), flags8, 2);
-      kv_s  (F("flags_bits"), sold_flags_to_string(flags8));
+      kv_s  (F("flags_bits"), sold_status_to_string(flags8));
     }
     if (len >= 12) {
       const uint8_t changes = d[11];
@@ -2263,7 +2263,7 @@ static bool decode_sold_statustool(Backend be, uint8_t ctrl, const uint8_t* d, u
     if (is16){
       kv_s(F("bits"), sold_statustool_bits_to_string(v));   // <<< neu
     } else {
-      kv_s(F("bits"), sold_flags_to_string(uint8_t(v)));    // 8-Bit Altfall
+      kv_s(F("bits"), sold_status_to_string(uint8_t(v)));    // 8-Bit Altfall
     }
     Serial.println();
     return true;

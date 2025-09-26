@@ -323,7 +323,7 @@ static bool map_ha02(const String& U, ConsoleCmd& out){
   if(U.equals(F("M_W_SELECTFLOW"))){           out.ctrl=HA_02::M_W_SELECTFLOW;          out.fmt=FMT_W_PORT_U16;             return true; } // M_W_SELECTFLOW <PORT> <FLOW> Port ist 0 Flow 100-1000 (10-100%)
   if(U.equals(F("M_W_SELECTEXTTEMP"))){        out.ctrl=HA_02::M_W_SELECTEXTTEMP;       out.fmt=FMT_W_PORT_TEMP;            return true; } // M_W_SELECTEXTTEMP <PORT> <TEMP> JTSE hat nur einen Port 0. Temp 25-450°C
   if(U.equals(F("M_W_REMOTEMODE"))){           out.ctrl=HA_02::M_W_REMOTEMODE;          out.fmt=FMT_U8;                     return true; } // M_W_REMOTEMODE <1/0> bei meiner JTSE sehe ich keine Änderung
-  if(U.equals(F("M_W_CONTIMODE"))){            out.ctrl=HA_02::M_W_CONTIMODE;           out.fmt=FMT_W_MASK_INDEX;         return true; } // Gibt es bei JTSE nicht!
+  if(U.equals(F("M_W_CONTIMODE"))){            out.ctrl=HA_02::M_W_CONTIMODE;           out.fmt=FMT_W_MASK_INDEX;         return true; } 
   if(U.equals(F("M_W_TEMPUNIT"))){             out.ctrl=HA_02::M_W_TEMPUNIT;            out.fmt=FMT_STRING;                 return true; } // M_W_TEMPUNIT <C/F> Celsius oder Fahrenheit
   if(U.equals(F("M_W_MAXMINTEMP"))){           out.ctrl=HA_02::M_W_MAXMINTEMP;          out.fmt=FMT_TEMP_TEMP;              return true; } // M_W_MAXMINTEMP <MAX> <MIN> 150-450°C 
   if(U.equals(F("M_W_MAXMINFLOW"))){           out.ctrl=HA_02::M_W_MAXMINFLOW;          out.fmt=FMT_U16_U16;                return true; } // M_W_MAXMINFLOW <MAX> <MIN> 100-1000 (10-100%)
@@ -333,9 +333,9 @@ static bool map_ha02(const String& U, ConsoleCmd& out){
   if(U.equals(F("M_W_PIN"))){                  out.ctrl=HA_02::M_W_PIN;                 out.fmt=FMT_STRING;                 return true; } // M_W_PIN <1234> Nach dem Befehl ein Leerzeichen und dann ein Passwort aus 4 Zahlen
   if(U.equals(F("M_W_DEVICENAME"))){           out.ctrl=HA_02::M_W_DEVICENAME;          out.fmt=FMT_STRING;                 return true; } // M_W_DEVICENAME <ABCDEFGHIJKLMNOPQ> Maximal 17 Zeichen A-Z 0-9
   if(U.equals(F("M_W_BEEP"))){                 out.ctrl=HA_02::M_W_BEEP;                out.fmt=FMT_U8;                     return true; } // M_W_BEEP <1/0> 
-  if(U.equals(F("M_W_LANGUAGE"))){             out.ctrl=HA_02::M_W_LANGUAGE;            out.fmt=FMT_U8;                     return true; } // Bei JTSE in Implementiert
-  if(U.equals(F("M_W_DATETIME"))){             out.ctrl=HA_02::M_W_DATETIME;            out.fmt=FMT_W_DT6;                  return true; } // yyyy mm dd HH MM SS Bei JTSE in Implementiert
-  if(U.equals(F("M_W_THEME"))){                out.ctrl=HA_02::M_W_THEME;               out.fmt=FMT_U8;                     return true; } // Bei JTSE in Implementiert
+  if(U.equals(F("M_W_LANGUAGE"))){             out.ctrl=HA_02::M_W_LANGUAGE;            out.fmt=FMT_U8;                     return true; } // Bei JTSE Implementiert
+  if(U.equals(F("M_W_DATETIME"))){             out.ctrl=HA_02::M_W_DATETIME;            out.fmt=FMT_W_DT6;                  return true; } // yyyy mm dd HH MM SS Bei JTSE Implementiert
+  if(U.equals(F("M_W_THEME"))){                out.ctrl=HA_02::M_W_THEME;               out.fmt=FMT_U8;                     return true; } // Bei JTSE Implementiert
   if(U.equals(F("M_W_USB_CONNECTSTATUS"))){    out.ctrl=HA_02::M_W_USB_CONNECTSTATUS;   out.fmt=FMT_STRING;                 return true; } // M_W_USB_CONNECTSTATUS <:C/:M> wenn Ihr Befehle Schreiben wollt erst mal auf :C
   
 
